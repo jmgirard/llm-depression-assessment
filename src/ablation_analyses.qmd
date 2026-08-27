@@ -1,0 +1,310 @@
+---
+title: "Ablation Analyses"
+author: "Jeffrey Girard"
+date: "2026-04-02"
+format: html
+---
+
+## Setup
+
+```{r setup}
+#| message: false
+
+library(tidyverse)
+library(readxl)
+library(furrr)
+library(brms)
+library(easystats)
+library(gt)
+
+plan("multisession", workers = 9)
+```
+
+## Prep Data
+
+```{r xids}
+# Look up which sessions were used as fewshot examples (to exclude them)
+excluded_ids <- 
+  map(
+    .x = 0:10,
+    .f = \(i) 
+      read_lines(
+        str_glue("../fewshot_ids/madrs_item_{i}_no_test_sessions.txt")
+      ) |> 
+      basename()
+  )
+```
+
+```{r raw}
+ablation_input <- "updated_results/madrs_predictions_by_video_ablation_small.xlsx"
+ablation_sheets <- excel_sheets(ablation_input)
+ablation_raw <- 
+  map(
+    .x = seq_along(ablation_sheets),
+    .f = \(x) read_xlsx(ablation_input, sheet = x) |> 
+      filter(str_detect(model_name, "22B-235B"))
+  )
+names(ablation_raw) <- ablation_sheets
+```
+
+```{r dfs}
+# Collect item score labels and item score predictions
+item_indices <- 1:10
+
+item_dfs <- map(
+  item_indices,
+  \(i) {
+    pv1_name <- sprintf("pred%02d_1", i)
+    pv2_name <- sprintf("pred%02d_2", i)
+    pv3_name <- sprintf("pred%02d_3", i)
+    ablation_raw[[i+1]] |>
+      transmute(
+        session,
+        patient,
+        model_name,
+        label = ground_truth,
+        !!pv1_name := rating_0,
+        !!pv2_name := rating_1,
+        !!pv3_name := rating_2
+      ) |> 
+      filter(session %in% excluded_ids[[i+1]] == FALSE) |> 
+      pivot_longer(starts_with("pred"), names_to = "var", values_to = "pred") |> 
+      separate_wider_delim(cols = var, delim = "_", names = c("item", "seed")) |> 
+      mutate(item = str_remove(item, "pred"))
+  }
+)
+```
+
+```{r all}
+# Combine collected data and calculate indirect total score predictions
+ablation_all <- bind_rows(item_dfs)
+```
+
+```{r dat}
+fit_dat <- 
+  ablation_all |>
+  transmute(
+    session = factor(session),
+    patient = factor(patient),
+    model = factor(
+      model_name, 
+      levels = c(
+        "Qwen 3 (22B-235B):", 
+        "Qwen 3 (22B-235B):  No Desc", 
+        "Qwen 3 (22B-235B):  No Dem",
+        "Qwen 3 (22B-235B):  Raw"
+      ),
+      labels = c(
+        "Maximal",
+        "NoD",
+        "NoX",
+        "Minimal"
+      )
+    ),
+    item = factor(item),
+    seed = factor(seed),
+    pred,
+    label,
+    abserr = abs(pred - label),
+    oabserr = factor(abserr, levels = 0:6, ordered = TRUE)
+  ) |> 
+  filter(!is.na(abserr)) |> 
+  summarize(
+    .by = c(session, patient, item, model),
+    across(pred:oabserr, \(x) first(x, na_rm = TRUE))
+  )
+```
+
+```{r splot}
+ggplot(fit_dat, aes(x = oabserr)) + facet_wrap(~model) + geom_bar()
+```
+
+## Fit HBM
+
+```{r fit}
+fit <- brm(
+  formula = oabserr ~ 1 + model + (1 + model | item) + (1 | patient),
+  data = fit_dat,
+  family = cumulative(link = "logit", threshold = "flexible"),
+  prior = c(
+    set_prior("normal(0, 3)", class = "b"),
+    set_prior("student_t(3, 0, 2.5)", class = "Intercept"),
+    set_prior("student_t(3, 0, 2.5)", class = "sd"),
+    set_prior("lkj_corr_cholesky(2)", class = "L")
+  ),
+  init = 0.1,
+  warmup = 3000,
+  iter = 4000,
+  chains = 4, 
+  cores = 4,
+  file = "ablation",
+  refresh = 500,
+  control = list(adapt_delta = 0.99, max_treedepth = 20),
+  backend = "cmdstanr"
+)
+```
+
+```{r}
+model_parameters(fit, effects = "all")
+```
+
+
+## Evaluate Model Fit
+
+```{r ppc}
+#| message: false
+#| warning: false
+#| cache: true
+#| fig-height: 4.5
+#| fig-width: 6.5
+
+p <- check_predictions(fit)
+p |> 
+  plot(
+    size_point = 3, 
+    size_bar = 1,
+    colors = c("grey60", "grey10")
+  ) + 
+  scale_x_continuous("Absolute Error", breaks = 1:7, labels = 0:6) + 
+  labs(title = NULL, subtitle = NULL) + 
+  theme_bw(base_size = 14) + 
+  theme(
+    panel.grid.minor.x = element_blank(), 
+    legend.position = "top"
+  )
+```
+
+## Plot Marginal Means
+
+```{r cep}
+#| message: false
+#| warning: false
+
+conditional_effects(fit, effects = "model", categorical = TRUE) |> plot()
+conditional_effects(fit, effects = "model", categorical = FALSE) |> plot()
+```
+
+```{r}
+#| warning: false
+
+conditional_effects(fit, effects = "model", categorical = FALSE)[[1]] |> 
+  as_tibble() |> 
+  mutate(
+    label = c("Rules + Examples", "Examples only", "Rules only", "Minimal"),
+    label = fct_reorder(label, estimate__),
+    # 1. Define your significance groupings based on your post-hoc tests.
+    #    (You will need to verify these exact letters based on your alpha level)
+    sig_group = c("a", "ab", "b", "c") 
+  ) |> 
+  ggplot(aes(x = estimate__, y = label)) +
+  geom_col(fill = "steelblue") +
+  # 2. Add the text labels just past the end of the bar
+  geom_text(
+    aes(label = sig_group, x = estimate__ + 0.05), 
+    size = 5,
+    fontface = "bold",
+    hjust = 0 # Aligns the text to the left so it flows away from the bar
+  ) +
+  # 3. Expand the x-axis limits slightly so the text doesn't get cut off
+  coord_cartesian(clip = "off") +
+  labs(x = "Mean Absolute Error (MAE)", y = NULL) +
+  theme_minimal()
+```
+
+
+
+## Test Hypotheses
+
+```{r hyp}
+h <- hypothesis(
+  x = fit,
+  hypothesis = c(
+    "NoD - Maximal" = "modelNoD > 0",
+    "NoX - Maximal" = "modelNoX > 0",
+    "Minimal - Maximal" = "modelMinimal > 0",
+    "NoD - NoX" = "modelNoD - modelNoX > 0",
+    "NoD - Minimal" = "modelNoD - modelMinimal < 0",
+    "NoX - Minimal" = "modelNoX - modelMinimal < 0"
+  ),
+  robust = TRUE
+)
+h$hypothesis |> 
+  mutate(
+    pval = 2*(1 - Post.Prob), 
+    OR = exp(Estimate),
+    Star = if_else(pval < .05, "*", "")
+  ) |>
+  gt() |>
+  fmt_number(columns = c(Estimate:Evid.Ratio, OR), decimals = 2) |>
+  fmt_number(columns = c(Post.Prob, pval), decimals = 3)
+```
+
+```{r}
+h[[1]] |> 
+  as_tibble() |> 
+  mutate(
+    # Reorder the contrasts by the size of the difference
+    Hypothesis = fct_reorder(Hypothesis, Estimate) 
+  ) |> 
+  ggplot(aes(x = Estimate, y = Hypothesis)) +
+  # Add a vertical reference line at zero
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray50", linewidth = 0.8) +
+  geom_errorbarh(aes(xmin = CI.Lower, xmax = CI.Upper), height = 0.2) +
+  geom_point(size = 3, color = "firebrick") +
+  labs(
+    x = "Estimated Difference in MAE", 
+    y = "Contrast"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+#| warning: false
+
+conditional_effects(fit, effects = "model", categorical = FALSE)[[1]] |> 
+  as_tibble() |> 
+  mutate(
+    label = c("Rules + Examples", "Examples only", "Rules only", "Minimal"),
+    has_rules = c("Yes", "No", "Yes", "No"),
+    has_examples = c("Yes", "Yes", "No", "No"),
+    has_rules = factor(has_rules, levels = c("No", "Yes")),
+    has_examples = factor(has_examples, levels = c("No", "Yes")),
+    # 1. Bring the significance letters back into the dataset
+    sig_group = c("a", "b", "ab", "c") 
+  ) |> 
+  ggplot(aes(x = has_rules, y = estimate__, color = has_examples, group = has_examples, shape = has_examples)) +
+  geom_errorbar(aes(ymin = lower__, ymax = upper__), width = 0.1, position = position_dodge(0.1)) +
+  geom_line(linewidth = 1, position = position_dodge(0.1)) +
+  geom_point(size = 4, position = position_dodge(0.1)) +
+  # 2. Add the text layer mapped to the significance groups
+  geom_text(
+    # Position the text just above the maximum CI bound
+    aes(label = sig_group, y = upper__ + 0.05), 
+    # Use the exact same dodge width so the text stays aligned with its point
+    position = position_dodge(0.1),
+    show.legend = FALSE, # Prevents an "a" from appearing inside the legend
+    size = 6,
+    fontface = "bold"
+  ) +
+  scale_color_manual(values = c("steelblue", "firebrick")) +
+  labs(
+    x = "Were Rules Provided?",
+    y = "Mean Absolute Error (MAE)",
+    color = "Were Examples Provided?",
+    shape = "Were Examples Provided?"
+  ) +
+  theme_minimal(base_size = 16) +
+  theme(legend.position = "top")
+ggsave("ablation.png", width = 7, height = 5, units = "in", dpi = 300)
+```
+
+## Plot Random Effects
+
+```{r}
+fit |> 
+  estimate_grouplevel(type = "random") |> 
+  filter(Group == "item") |> 
+  plot()
+```
+
+

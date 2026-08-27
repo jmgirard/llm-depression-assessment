@@ -1,0 +1,152 @@
+---
+title: "Ensemble Analyses"
+author: "Jeffrey Girard"
+date: "2026-08-27"
+format:
+  html:
+    page-layout: full
+    toc: true
+    code-fold: true
+---
+
+Compare item-level ensemble aggregation across the 25 evaluated models to the
+best single model (Qwen 3 22B-235B), using the indirect scoring approach.
+Prompted by an editor suggestion during review at JPCS.
+
+## Setup
+
+```{r setup}
+#| message: false
+
+library(tidyverse)
+library(readxl)
+library(gt)
+
+ccc <- function(x, y) {
+  mx <- mean(x); my <- mean(y)
+  vx <- mean((x - mx)^2); vy <- mean((y - my)^2)
+  cxy <- mean((x - mx) * (y - my))
+  2 * cxy / (vx + vy + (mx - my)^2)
+}
+```
+
+## Prep Data
+
+```{r xids}
+# Look up which sessions were used as fewshot examples (to exclude them)
+excluded_ids <-
+  map(
+    .x = 0:10,
+    .f = \(i)
+      read_lines(
+        str_glue("../../fewshot_ids/madrs_item_{i}_no_test_sessions.txt")
+      ) |>
+      basename()
+  )
+
+# Sessions excluded from any item's evaluation (union across items 1-10)
+union_excl <- reduce(excluded_ids[2:11], union)
+```
+
+```{r ens-data}
+main_input <- "../../madrs_predictions_by_video_fewshot_small.xlsx"
+
+ens_items <-
+  map(
+    .x = 1:10,
+    .f = \(i) {
+      read_xlsx(main_input, sheet = i + 1) |>
+        filter(session %in% excluded_ids[[i + 1]] == FALSE) |>
+        transmute(
+          session,
+          patient,
+          model = str_trim(model_name),
+          item = sprintf("%02d", i),
+          label = ground_truth,
+          # Self-ensemble across the three seeds (as in the main evaluation)
+          pred = rowMeans(cbind(rating_0, rating_1, rating_2), na.rm = TRUE)
+        )
+    }
+  ) |>
+  bind_rows() |>
+  filter(session %in% union_excl == FALSE, !is.nan(pred))
+```
+
+## Build Estimators
+
+```{r ens-est}
+best_model <- str_subset(unique(ens_items$model), "22B-235B")
+tiny_models <- str_subset(unique(ens_items$model), "0\\.6B|1\\.7B|\\(4B\\)")
+
+# Post-hoc set: five best models by indirect MAE in the primary benchmarking.
+# NOTE: selected on the same evaluation data, so estimates are optimistically
+# biased; report only with that caveat.
+top5_models <- str_subset(
+  unique(ens_items$model),
+  "22B-235B|14B\\): 1M|R1 Qwen 2.5|GPT OSS 120B|R1 Llama 3.3"
+)
+
+item_est <-
+  ens_items |>
+  summarize(
+    .by = c(session, item),
+    label = first(label),
+    best = pred[model == best_model][1],
+    ens_mean = mean(pred),
+    ens_median = median(pred),
+    ens_median_8b = median(pred[model %in% tiny_models == FALSE]),
+    ens_mean_top5 = mean(pred[model %in% top5_models])
+  )
+
+# Complete sessions only: all 10 items scored and every estimator available,
+# so all estimators are evaluated on the same session set
+total_est <-
+  item_est |>
+  summarize(
+    .by = session,
+    n_items = n(),
+    across(c(label, best, ens_mean, ens_median, ens_median_8b, ens_mean_top5), sum)
+  ) |>
+  filter(n_items == 10, if_all(everything(), \(x) !is.na(x)))
+```
+
+## Results
+
+```{r ens-results}
+total_est |>
+  pivot_longer(
+    c(best, ens_mean, ens_median, ens_median_8b, ens_mean_top5),
+    names_to = "estimator", values_to = "pred"
+  ) |>
+  summarize(
+    .by = estimator,
+    N = n(),
+    MAE = mean(abs(pred - label)),
+    CCC = ccc(pred, label)
+  ) |>
+  mutate(
+    estimator = recode(estimator,
+      best = "Best single model (Qwen 3 22B-235B)",
+      ens_mean = "Ensemble: mean (all 25)",
+      ens_median = "Ensemble: median (all 25)",
+      ens_median_8b = "Ensemble: median (models >= 8B)",
+      ens_mean_top5 = "Ensemble: mean (top 5; post hoc)"
+    )
+  ) |>
+  gt() |>
+  fmt_number(columns = MAE, decimals = 2) |>
+  fmt_number(columns = CCC, decimals = 3) |>
+  cols_label(estimator = "Estimator") |>
+  cols_align(align = "left", columns = estimator) |>
+  tab_header(
+    title = "Ensemble vs. Best Single Model",
+    subtitle = "Indirect MADRS total score prediction"
+  ) |>
+  tab_source_note(paste(
+    "Item predictions averaged over three seeds within model, then aggregated",
+    "across models per item and summed to totals. All estimators evaluated on",
+    "the same complete sessions. Top-5 selection used the same evaluation data",
+    "and is optimistically biased."
+  )) |>
+  tab_options(table.font.size = 14)
+```

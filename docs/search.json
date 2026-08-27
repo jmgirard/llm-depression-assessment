@@ -1,0 +1,30 @@
+[
+  {
+    "objectID": "index.html",
+    "href": "index.html",
+    "title": "Supplemental Materials",
+    "section": "",
+    "text": "This site hosts the supplemental analysis reports and source code for:"
+  },
+  {
+    "objectID": "index.html#analysis-reports",
+    "href": "index.html#analysis-reports",
+    "title": "Supplemental Materials",
+    "section": "Analysis Reports",
+    "text": "Analysis Reports\nEach report is a rendered Quarto document containing the complete analysis code and output. The corresponding source files (.qmd) are available in the source folder.\n\n\n\nReport\nDescription\n\n\n\n\nPerformance Analyses\nBenchmarking of 25 open-weight LLMs on MADRS item and total score prediction; direct vs. indirect scoring comparison; error characterization\n\n\nFairness Analyses\nPsychometric fairness audit (bias, sensitivity, precision) across sex, age, race, education, primary diagnosis, and interviewer\n\n\nAblation Analyses\nPrompt ablation study isolating the contributions of descriptive and demonstrative cues\n\n\nEnsemble Analyses\nComparison of cross-model ensemble aggregation to the best single model"
+  },
+  {
+    "objectID": "index.html#data-availability",
+    "href": "index.html#data-availability",
+    "title": "Supplemental Materials",
+    "section": "Data Availability",
+    "text": "Data Availability\nThe interview recordings and transcripts analyzed in this work cannot be publicly shared because they contain identifiable protected health information from psychiatric inpatients. The analysis reports above include all code required to reproduce the reported results; the deidentified model prediction files they operate on are available from the corresponding author upon reasonable request."
+  },
+  {
+    "objectID": "index.html#contact",
+    "href": "index.html#contact",
+    "title": "Supplemental Materials",
+    "section": "Contact",
+    "text": "Contact\nJeffrey M. Girard, Department of Psychology, University of Kansas — jmgirard@ku.edu"
+  }
+]

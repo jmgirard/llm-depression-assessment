@@ -1,0 +1,35 @@
+---
+title: "Supplemental Materials"
+subtitle: "Evaluating Open-Weight Large Language Models for Structured Depression Assessment from Clinical Interviews"
+---
+
+This site hosts the supplemental analysis reports and source code for:
+
+> Girard, J. M., Kebe, G. Y., Morency, L.-P., De la Torre, F., Liebenthal, E., & Baker, J. T. (in press). Evaluating open-weight large language models for structured depression assessment from clinical interviews. *Journal of Psychopathology and Clinical Science*.
+
+## Analysis Reports
+
+Each report is a rendered Quarto document containing the complete analysis code
+and output. The corresponding source files (`.qmd`) are available in the
+[source folder](https://github.com/jmgirard/llm-depression-assessment/tree/main/src).
+
+| Report | Description |
+|---|---|
+| [Performance Analyses](analyses/performance_analyses.html) | Benchmarking of 25 open-weight LLMs on MADRS item and total score prediction; direct vs. indirect scoring comparison; error characterization |
+| [Fairness Analyses](analyses/fairness_analyses.html) | Psychometric fairness audit (bias, sensitivity, precision) across sex, age, race, education, primary diagnosis, and interviewer |
+| [Ablation Analyses](analyses/ablation_analyses.html) | Prompt ablation study isolating the contributions of descriptive and demonstrative cues |
+| [Ensemble Analyses](analyses/ensemble_analyses.html) | Comparison of cross-model ensemble aggregation to the best single model |
+
+## Data Availability
+
+The interview recordings and transcripts analyzed in this work cannot be
+publicly shared because they contain identifiable protected health information
+from psychiatric inpatients. The analysis reports above include all code
+required to reproduce the reported results; the deidentified model prediction
+files they operate on are available from the corresponding author upon
+reasonable request.
+
+## Contact
+
+Jeffrey M. Girard, Department of Psychology, University of Kansas —
+[jmgirard@ku.edu](mailto:jmgirard@ku.edu)

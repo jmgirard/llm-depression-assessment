@@ -1,0 +1,688 @@
+---
+title: "Fairness Analyses"
+author: "Jeffrey Girard"
+date: "2026-08-26"
+format:
+  html:
+    page-layout: full
+    toc: true
+    code-fold: true
+---
+
+Testing Qwen 3 (22B-235B)
+
+## Setup
+
+### Load Dependencies
+
+```{r setup}
+#| message: false
+
+# https://github.com/jmgirard/rocker-bayes/releases/tag/v6.0
+
+library(tidyverse)
+library(readxl)
+library(brms)
+library(rstan)
+library(easystats)
+library(tidybayes)
+library(emmeans)
+library(gt)
+library(posterior)
+
+silently <- function(x) {
+  suppressWarnings(suppressMessages(x))
+}
+
+my_priors <- c(
+  set_prior("normal(0, 3)", class = "b"),
+  set_prior("student_t(3, 0, 2.5)", class = "Intercept"),
+  set_prior("student_t(3, 0, 2.5)", class = "sd"),
+  set_prior("lkj_corr_cholesky(2)", class = "L"),
+  set_prior("normal(0, 2)", class = "Intercept", dpar = "phi"),
+  set_prior("normal(0, 2)", class = "b", dpar = "phi")
+)
+```
+
+## Prep Data
+
+```{r xids}
+# Look up which sessions were used as fewshot examples (to exclude them)
+excluded_ids <-
+  map(
+    .x = 0:10,
+    .f = \(i)
+      read_lines(
+        str_glue("../../fewshot_ids/madrs_item_{i}_no_test_sessions.txt")
+      ) |>
+      basename()
+  )
+```
+
+```{r raw}
+ablation_input <- "../updated_results/madrs_predictions_by_video_ablation_small.xlsx"
+ablation_sheets <- excel_sheets(ablation_input)
+ablation_raw <-
+  map(
+    .x = seq_along(ablation_sheets),
+    .f = \(x) read_xlsx(ablation_input, sheet = x) |>
+      filter(str_detect(model_name, "22B-235B"))
+  )
+names(ablation_raw) <- ablation_sheets
+```
+
+```{r dat}
+# Collect item score labels and predictions (one sheet per item, three seeds each)
+dat_items <-
+  map(
+    .x = 1:10,
+    .f = \(i) {
+      ablation_raw[[i + 1]] |>
+        filter(session %in% excluded_ids[[i + 1]] == FALSE) |>
+        transmute(
+          session,
+          patient,
+          model_name,
+          rater,
+          item = sprintf("%02d", i),
+          label = ground_truth,
+          seed_1 = rating_0,
+          seed_2 = rating_1,
+          seed_3 = rating_2
+        ) |>
+        pivot_longer(
+          starts_with("seed_"),
+          names_to = "seed",
+          names_prefix = "seed_",
+          values_to = "pred"
+        )
+    }
+  ) |>
+  bind_rows() |>
+  filter(model_name == "Qwen 3 (22B-235B):") |>
+  transmute(
+    session,
+    patient,
+    rater,
+    item = factor(item),
+    seed = factor(seed),
+    pred,
+    label
+  )
+
+# Indirect total scores: first non-missing prediction per item, summed per session
+dat_sums <-
+  dat_items |>
+  summarize(
+    .by = c(session, patient, item),
+    rater = first(rater),
+    pred = first(pred, na_rm = TRUE),
+    label = first(label)
+  ) |>
+  summarize(
+    .by = c(session, patient),
+    rater = first(rater),
+    pred = sum(pred),
+    label = sum(label)
+  )
+```
+
+```{r demo}
+demo <-
+  read_xlsx("../cami_demographics.xlsx") |>
+  transmute(
+    patient = Record.ID,
+    diagnosis = fct_collapse(Diagnosis.at.Admission,
+      Depression = c("MDD", "MDD w/ psychosis"),
+      Bipolar = c("BP1 (manic)", "BP1 (hypomanic)", "BP1 (depressed)",
+                  "BP1 (mixed)", "BP2 (depressed)", "BP2 (hypomanic)", "BP NOS"),
+      Psychosis = c("SZ", "SZA (bp)", "SZA (dep)", "Psychosis NOS"),
+      other_level = "Substance"
+    ),
+    diagnosis = fct_relevel(diagnosis, after = 0,
+      "Depression", "Bipolar", "Psychosis", "Substance"
+    ),
+    age = Age,
+    sex = factor(Sex, levels = c("Female", "Male")),
+    race = fct_collapse(Race,
+      White = "White",
+      Black = "Black or African American",
+      other_level = "Other"
+    ),
+    race = fct_relevel(race, after = 0,
+      "White", "Black", "Other"
+    ),
+    education = factor(
+      Education,
+      levels = c("Less than High School", "High School/GED",
+                 "Part College or 2-year degree", "4-year College degree",
+                 "Part or completed Graduate degree"),
+      ordered = TRUE
+    ),
+    education0 = as.integer(education) - 1
+  ) |>
+  # The demographics file can contain repeated Record.IDs (e.g., re-recorded
+  # at a later visit); keep one row per patient
+  distinct(patient, .keep_all = TRUE) |>
+  # Standardize person-level predictors within the analytic sample only
+  filter(patient %in% unique(dat_sums$patient)) |>
+  mutate(agez = standardize(age))
+
+# Interviewer identity: the predictions file's rater column, with missing
+# values filled from REDCap by matching patient and interview date (the
+# session ID embeds the date as YYMMDD in its second segment).
+# NOTE: interviewer usernames are redacted (RA1-RA4; RA2x was a typo variant
+# of RA2 in the raw data) in this public copy of the analysis code
+redcap_raters <-
+  read_csv("interviewer_ids.csv", show_col_types = FALSE) |>
+  filter(!is.na(panss6_rating_date)) |>
+  transmute(
+    patient = record_id,
+    date6 = format(ymd(panss6_rating_date), "%y%m%d"),
+    rater_rc = str_trim(panss_rater_username)
+  ) |>
+  distinct(patient, date6, .keep_all = TRUE)
+
+ready_sums <-
+  dat_sums |>
+  mutate(date6 = str_split_i(session, "_", 2)) |>
+  left_join(redcap_raters, by = c("patient", "date6")) |>
+  left_join(demo, by = "patient") |>
+  mutate(
+    interviewer = coalesce(str_trim(rater), rater_rc),
+    interviewer = if_else(interviewer == "RA2x", "RA2", interviewer),
+    interviewer = factor(
+      interviewer,
+      levels = c("RA1", "RA2", "RA3", "RA4"),
+      labels = c("Interviewer 1", "Interviewer 2", "Interviewer 3", "Interviewer 4")
+    ),
+    patient = factor(patient),
+    labelz = standardize(label)
+  ) |>
+  select(-date6, -rater, -rater_rc)
+```
+
+### Create Functions
+
+#### Postprocess Model Results
+
+```{r audit}
+# Extract bias, sensitivity, and precision deviations from an audit model.
+# Categorical predictors get per-level relative deviations (vs. grand mean);
+# numeric predictors get a single slope-style deviation per metric.
+audit_fairness <- function(model, group_var, contrast_label = group_var) {
+
+  if (is.numeric(model$data[[group_var]])) {
+    # ==========================================
+    # CONTINUOUS LOGIC (Overall Trend)
+    # ==========================================
+    draws <- as_draws_df(model)
+
+    bias_col <- grep(paste0("^b_", group_var, "$"), names(draws), value = TRUE)
+    sens_col <- grep(paste0("^b_labelz:", group_var, "$|^b_", group_var, ":labelz$"), names(draws), value = TRUE)
+    prec_col <- grep(paste0("^b_phi_", group_var, "$"), names(draws), value = TRUE)
+
+    process_param <- function(col_name, metric_name) {
+      if (length(col_name) == 0) return(NULL)
+      vals <- draws[[col_name[1]]]
+      tibble(
+        contrast = contrast_label,
+        Metric = metric_name,
+        Deviation = mean(vals),
+        CI_Low = quantile(vals, 0.025),
+        CI_High = quantile(vals, 0.975),
+        pd = as.numeric(bayestestR::p_direction(vals)$pd),
+        p_val = 2 * (1 - pd)
+      )
+    }
+
+    bind_rows(
+      process_param(bias_col, "Bias (Sum Score)"),
+      process_param(sens_col, "Sensitivity (Slope)"),
+      process_param(prec_col, "Precision (Log Phi)")
+    ) |>
+      mutate(contrast = factor(contrast))
+
+  } else {
+    # ==========================================
+    # CATEGORICAL LOGIC (Per-Level)
+    # ==========================================
+    orig_levels <- levels(model$data[[group_var]])
+
+    # Per-level relative deviations from the per-draw grand mean
+    # (emmeans/tidybayes draws arrive grouped; .by requires ungrouped data)
+    process_posterior <- function(post_draws, type_name) {
+      post_draws |>
+        ungroup() |>
+        mutate(contrast = as.character(contrast)) |>
+        mutate(grand_mean = mean(.value), .by = .draw) |>
+        mutate(deviation = .value - grand_mean) |>
+        summarize(
+          .by = contrast,
+          Metric = type_name,
+          Deviation = mean(deviation),
+          CI_Low = quantile(deviation, 0.025),
+          CI_High = quantile(deviation, 0.975),
+          pd = as.numeric(bayestestR::p_direction(deviation)$pd),
+          p_val = 2 * (1 - pd)
+        )
+    }
+
+    # Bias: expected sum score per level at average severity
+    grid <- tibble(!!group_var := orig_levels, labelz = 0)
+    draws_bias <- model |>
+      epred_draws(newdata = grid, re_formula = NA) |>
+      ungroup() |>
+      transmute(.draw, contrast = .data[[group_var]], .value = .epred)
+
+    # Sensitivity: severity slope per level
+    draws_sens <- silently(emtrends(model, specs = group_var, var = "labelz")) |>
+      gather_emmeans_draws() |>
+      ungroup() |>
+      rename(contrast = all_of(group_var))
+
+    # Precision: log phi per level
+    draws_prec <- silently(emmeans(model, specs = group_var, dpar = "phi")) |>
+      gather_emmeans_draws() |>
+      ungroup() |>
+      rename(contrast = all_of(group_var))
+
+    bind_rows(
+      process_posterior(draws_bias, "Bias (Sum Score)"),
+      process_posterior(draws_sens, "Sensitivity (Slope)"),
+      process_posterior(draws_prec, "Precision (Log Phi)")
+    ) |>
+      mutate(contrast = factor(contrast, levels = orig_levels)) |>
+      arrange(Metric, contrast)
+  }
+}
+```
+
+#### Create Results Summary Table
+
+```{r tables}
+format_deviation_table <- function(deviations_df) {
+  deviations_df |>
+    mutate(
+      Metric_Short = case_when(
+        grepl("Bias", Metric) ~ "Bias",
+        grepl("Sensitivity", Metric) ~ "Sens",
+        grepl("Precision", Metric) ~ "Prec",
+        TRUE ~ "Other"
+      ),
+      CI_Label = sprintf("[%.2f, %.2f]", CI_Low, CI_High)
+    ) |>
+    select(contrast, Metric_Short, Deviation, p_val, CI_Label) |>
+    pivot_wider(
+      names_from = Metric_Short,
+      values_from = c(Deviation, p_val, CI_Label),
+      names_glue = "{Metric_Short}_{.value}"
+    ) |>
+    select(
+      contrast,
+      starts_with("Bias"),
+      starts_with("Sens"),
+      starts_with("Prec")
+    ) |>
+    gt() |>
+    tab_spanner(label = "Bias (Intercept)", columns = starts_with("Bias")) |>
+    tab_spanner(label = "Sensitivity (Slope)", columns = starts_with("Sens")) |>
+    tab_spanner(label = "Precision (Noise)", columns = starts_with("Prec")) |>
+    fmt_number(columns = ends_with("Deviation"), decimals = 2) |>
+    fmt_number(columns = ends_with("p_val"), decimals = 3) |>
+    text_transform(
+      locations = cells_body(columns = ends_with("p_val")),
+      fn = function(x) {
+        vals <- suppressWarnings(as.numeric(x))
+        ifelse(is.na(vals), x,
+               ifelse(vals < 0.001, "< .001", sprintf("%.3f", vals))
+        )
+      }
+    ) |>
+    cols_label(
+      contrast = "Group",
+      Bias_Deviation = "Dev.", Bias_p_val = "p-val", Bias_CI_Label = "95% CI",
+      Sens_Deviation = "Dev.", Sens_p_val = "p-val", Sens_CI_Label = "95% CI",
+      Prec_Deviation = "Dev.", Prec_p_val = "p-val", Prec_CI_Label = "95% CI"
+    ) |>
+    cols_align(align = "left", columns = contrast) |>
+    tab_header(
+      title = "Fairness Audit Results",
+      subtitle = "Systematic Deviations by Metric"
+    ) |>
+    tab_style(
+      style = cell_text(weight = "bold"),
+      locations = list(
+        cells_body(columns = "Bias_p_val", rows = Bias_p_val < 0.05),
+        cells_body(columns = "Sens_p_val", rows = Sens_p_val < 0.05),
+        cells_body(columns = "Prec_p_val", rows = Prec_p_val < 0.05)
+      )
+    ) |>
+    tab_options(table.font.size = 14)
+}
+
+# Helper: format an Est + 95% CI summary as a gt table
+gt_est_table <- function(df, group_col, group_label, est_label, title, subtitle = NULL) {
+  df |>
+    mutate(CI_Label = sprintf("[%.2f, %.2f]", CI_Low, CI_High)) |>
+    select(all_of(group_col), Est, CI_Label, any_of("p_val")) |>
+    gt() |>
+    fmt_number(columns = Est, decimals = 2) |>
+    cols_label(.list = setNames(list(group_label, est_label, "95% CI"),
+                                c(group_col, "Est", "CI_Label"))) |>
+    cols_align(align = "left", columns = all_of(group_col)) |>
+    tab_header(title = title, subtitle = subtitle) |>
+    tab_options(table.font.size = 14)
+}
+```
+
+## Run Analyses
+
+All audit models share the same structure; only the group variable differs.
+Fits are cached to .rds files, so settings changes require deleting the
+corresponding file to take effect.
+
+```{r fitfun}
+fit_audit <- function(group_term, file, seed = NA) {
+  brm(
+    bf(
+      as.formula(paste0(
+        "pred | trials(60) ~ labelz * ", group_term, " + (1 + labelz | patient)"
+      )),
+      as.formula(paste0("phi ~ ", group_term))
+    ),
+    data = ready_sums,
+    family = beta_binomial(link = "logit", link_phi = "log"),
+    prior = my_priors,
+    init = 0.1,
+    warmup = 3000,
+    iter = 5000,
+    cores = 4,
+    chains = 4,
+    refresh = 0,
+    seed = seed,
+    file = file,
+    control = list(adapt_delta = 0.99, max_treedepth = 12),
+    backend = "cmdstanr"
+  )
+}
+```
+
+```{r fits}
+fit_sex  <- fit_audit("sex", file = "sex")
+fit_age  <- fit_audit("agez", file = "age")
+fit_race <- fit_audit("race", file = "race")
+fit_edu  <- fit_audit("education0", file = "edu", seed = 1)
+fit_diag <- fit_audit("diagnosis", file = "diag")
+fit_intv <- fit_audit("interviewer", file = "intv")
+```
+
+## Convergence Diagnostics
+
+```{r convergence}
+check_convergence <- function(fit, name) {
+  n_divergent <- nuts_params(fit) |>
+    filter(Parameter == "divergent__") |>
+    pull(Value) |>
+    sum()
+
+  summarise_draws(as_draws_df(fit), "rhat", "ess_bulk", "ess_tail") |>
+    filter(!variable %in% c("lprior", "lp__"), !str_starts(variable, "r_")) |>
+    mutate(
+      class = if_else(
+        str_starts(variable, "sd_") | str_starts(variable, "cor_"),
+        "Random", "Fixed"
+      ),
+      model = name
+    ) |>
+    summarize(
+      .by = c(model, class),
+      max_rhat = max(rhat, na.rm = TRUE),
+      min_ess_bulk = min(ess_bulk, na.rm = TRUE),
+      min_ess_tail = min(ess_tail, na.rm = TRUE),
+      n_params = n(),
+      n_divergent = n_divergent
+    )
+}
+
+bind_rows(
+  check_convergence(fit_sex, "Sex"),
+  check_convergence(fit_age, "Age"),
+  check_convergence(fit_race, "Race"),
+  check_convergence(fit_edu, "Education"),
+  check_convergence(fit_diag, "Diagnosis"),
+  check_convergence(fit_intv, "Interviewer")
+) |>
+  arrange(class, model) |>
+  gt(groupname_col = "class") |>
+  fmt_number(columns = max_rhat, decimals = 3) |>
+  fmt_number(columns = starts_with("min_ess"), decimals = 0) |>
+  cols_label(
+    model = "Model",
+    max_rhat = "Max R-hat",
+    min_ess_bulk = "Min Bulk ESS",
+    min_ess_tail = "Min Tail ESS",
+    n_params = "Parameters",
+    n_divergent = "Divergences"
+  ) |>
+  cols_align(align = "left", columns = model) |>
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = list(
+      cells_body(columns = max_rhat, rows = max_rhat >= 1.01),
+      cells_body(columns = min_ess_bulk, rows = min_ess_bulk < 400),
+      cells_body(columns = min_ess_tail, rows = min_ess_tail < 400),
+      cells_body(columns = n_divergent, rows = n_divergent > 0)
+    )
+  ) |>
+  tab_header(
+    title = "Convergence Diagnostics by Model",
+    subtitle = "Worst-case values across parameters (patient-level effects excluded)"
+  ) |>
+  tab_source_note("Bold marks values to inspect: R-hat >= 1.01, ESS < 400, or any divergent transitions.") |>
+  tab_options(table.font.size = 14)
+```
+
+## Collect and Format Results
+
+```{r results}
+res_deviations <-
+  bind_rows(
+    audit_fairness(fit_sex, group_var = "sex"),
+    audit_fairness(fit_age, group_var = "agez", contrast_label = "Age (per SD)"),
+    audit_fairness(fit_race, group_var = "race"),
+    audit_fairness(fit_edu, group_var = "education0", contrast_label = "Education (per level)"),
+    audit_fairness(fit_diag, group_var = "diagnosis"),
+    audit_fairness(fit_intv, group_var = "interviewer")
+  )
+
+# The "Substance" factor level is retained in the fitted models (renaming it
+# would invalidate the cached fits); clinical record review showed the group
+# is heterogeneous, so it is reported as "Other". Displayed here as "Other
+# Diagnosis" because the racial group also has an "Other" level and duplicate
+# contrast names break the pivot in format_deviation_table()
+res_deviations <- res_deviations |>
+  mutate(contrast = fct_recode(contrast, "Other Diagnosis" = "Substance"))
+
+format_deviation_table(res_deviations)
+```
+
+## Expected Predictions (Raw Scale)
+
+### Audit Group Sizes
+
+```{r group-ns}
+ready_sums |>
+  distinct(patient, diagnosis) |>
+  count(diagnosis, name = "Patients") |>
+  mutate(diagnosis = fct_recode(diagnosis, Other = "Substance")) |>
+  gt() |>
+  cols_label(diagnosis = "Audit Group") |>
+  cols_align(align = "left", columns = diagnosis) |>
+  tab_header(title = "Patients per Diagnostic Audit Group") |>
+  tab_options(table.font.size = 14)
+
+ready_sums |>
+  count(interviewer, name = "Sessions") |>
+  gt() |>
+  cols_label(interviewer = "Interviewer") |>
+  cols_align(align = "left", columns = interviewer) |>
+  tab_header(
+    title = "Sessions per Interviewer",
+    subtitle = "NA = interviewer identity unresolved (excluded from interviewer model)"
+  ) |>
+  tab_options(table.font.size = 14)
+```
+
+### Sensitivity by Diagnostic Group
+
+```{r diag-slopes}
+grid_diag <- expand_grid(
+  diagnosis = levels(ready_sums$diagnosis),
+  labelz = c(-1, 0, 1)
+)
+
+diag_display <- c("Depression", "Bipolar", "Psychosis", "Other")
+
+slope_draws <- fit_diag |>
+  epred_draws(newdata = grid_diag, re_formula = NA) |>
+  ungroup() |>
+  select(diagnosis, labelz, .draw, .epred) |>
+  mutate(diagnosis = recode(diagnosis, Substance = "Other")) |>
+  pivot_wider(names_from = labelz, values_from = .epred, names_prefix = "SD_") |>
+  mutate(slope_points = SD_1 - SD_0)
+
+slope_draws |>
+  mutate(diagnosis = factor(diagnosis, levels = diag_display)) |>
+  summarize(
+    .by = diagnosis,
+    Est = mean(slope_points),
+    CI_Low = quantile(slope_points, 0.025),
+    CI_High = quantile(slope_points, 0.975)
+  ) |>
+  arrange(diagnosis) |>
+  gt_est_table(
+    group_col = "diagnosis", group_label = "Group",
+    est_label = "Points per SD",
+    title = "Expected Sensitivity by Diagnostic Group",
+    subtitle = "Raw MADRS points per SD of true severity"
+  )
+```
+
+```{r diag-contrast}
+contrast_draws <- slope_draws |>
+  select(diagnosis, .draw, slope_points) |>
+  pivot_wider(names_from = diagnosis, values_from = slope_points) |>
+  mutate(diff = Other - Depression)
+
+contrast_draws |>
+  summarize(
+    Contrast = "Other - Depression",
+    Est = mean(diff),
+    CI_Label = sprintf("[%.2f, %.2f]", quantile(diff, 0.025), quantile(diff, 0.975)),
+    p_val = 2 * (1 - as.numeric(bayestestR::p_direction(diff)$pd))
+  ) |>
+  gt() |>
+  fmt_number(columns = Est, decimals = 2) |>
+  text_transform(
+    locations = cells_body(columns = p_val),
+    fn = \(x) {
+      vals <- suppressWarnings(as.numeric(x))
+      ifelse(vals < 0.001, "< .001", sprintf("%.3f", vals))
+    }
+  ) |>
+  cols_label(Est = "Est.", CI_Label = "95% CI", p_val = "p-val") |>
+  tab_style(
+    style = cell_text(weight = "bold"),
+    locations = cells_body(columns = p_val, rows = p_val < 0.05)
+  ) |>
+  tab_header(
+    title = "Sensitivity Contrast in Raw Points",
+    subtitle = "Difference in expected points per SD of true severity"
+  ) |>
+  tab_options(table.font.size = 14)
+```
+
+### Bias and Precision by Education
+
+```{r edu-bias}
+edu_labels <- levels(ready_sums$education)
+
+grid_edu <- expand_grid(education0 = 0:4, labelz = 0)
+
+fit_edu |>
+  epred_draws(newdata = grid_edu, re_formula = NA) |>
+  ungroup() |>
+  summarize(
+    .by = education0,
+    Est = mean(.epred),
+    CI_Low = quantile(.epred, 0.025),
+    CI_High = quantile(.epred, 0.975)
+  ) |>
+  arrange(education0) |>
+  mutate(Education = edu_labels[education0 + 1]) |>
+  gt_est_table(
+    group_col = "Education", group_label = "Education Level",
+    est_label = "Expected Score",
+    title = "Expected MADRS Prediction by Education",
+    subtitle = "At average severity (labelz = 0)"
+  )
+```
+
+```{r edu-prec}
+grid_ext <- tibble(education0 = c(0, 4), labelz = 0)
+
+mu_draws <- posterior_epred(fit_edu, newdata = grid_ext, re_formula = NA) / 60
+phi_draws <- posterior_linpred(fit_edu, newdata = grid_ext, re_formula = NA,
+                               dpar = "phi", transform = TRUE)
+# Beta-binomial SD in raw MADRS points (n = 60 trials)
+sd_draws <- sqrt(60 * mu_draws * (1 - mu_draws) * (1 + 59 / (phi_draws + 1)))
+
+tibble(
+  education0 = rep(c(0, 4), each = nrow(sd_draws)),
+  sd = c(sd_draws[, 1], sd_draws[, 2])
+) |>
+  summarize(
+    .by = education0,
+    Est = mean(sd),
+    CI_Low = quantile(sd, 0.025),
+    CI_High = quantile(sd, 0.975)
+  ) |>
+  arrange(education0) |>
+  mutate(Education = edu_labels[education0 + 1]) |>
+  gt_est_table(
+    group_col = "Education", group_label = "Education Level",
+    est_label = "Prediction SD",
+    title = "Model-Implied Prediction Noise by Education",
+    subtitle = "SD of predictions in raw MADRS points"
+  )
+```
+
+### Precision by Interviewer
+
+```{r intv-prec}
+intv_levels <- levels(ready_sums$interviewer)
+grid_intv <- tibble(interviewer = intv_levels, labelz = 0)
+
+mu_intv <- posterior_epred(fit_intv, newdata = grid_intv, re_formula = NA) / 60
+phi_intv <- posterior_linpred(fit_intv, newdata = grid_intv, re_formula = NA,
+                              dpar = "phi", transform = TRUE)
+sd_intv <- sqrt(60 * mu_intv * (1 - mu_intv) * (1 + 59 / (phi_intv + 1)))
+
+tibble(
+  interviewer = rep(intv_levels, each = nrow(sd_intv)),
+  sd = as.numeric(sd_intv)
+) |>
+  summarize(
+    .by = interviewer,
+    Est = mean(sd),
+    CI_Low = quantile(sd, 0.025),
+    CI_High = quantile(sd, 0.975)
+  ) |>
+  gt_est_table(
+    group_col = "interviewer", group_label = "Interviewer",
+    est_label = "Prediction SD",
+    title = "Model-Implied Prediction Noise by Interviewer",
+    subtitle = "SD of predictions in raw MADRS points"
+  )
+```

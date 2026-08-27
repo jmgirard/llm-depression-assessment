@@ -1,0 +1,908 @@
+---
+title: "Performance Analyses"
+author: "Jeffrey Girard"
+date: "2026-04-02"
+format: html
+---
+
+## Setup
+
+```{r setup}
+#| message: false
+
+library(tidyverse)
+library(patchwork)
+library(readxl)
+library(furrr)
+library(gt)
+
+plan("multisession", workers = 10)
+```
+
+## Tidy Data
+
+```{r}
+fewshot_input <- file.path(
+  "updated_results", 
+  "madrs_predictions_by_video_small.xlsx"
+)
+fewshot_sheets <- excel_sheets(fewshot_input)
+fewshot_raw <- 
+  map(
+    .x = seq_along(fewshot_sheets),
+    .f = \(x) read_xlsx(fewshot_input, sheet = x)
+  ) |> 
+  set_names(fewshot_sheets)
+```
+
+```{r}
+# Look up which sessions were used as fewshot examples (to exclude them)
+excluded_ids <- 
+  map(
+    .x = 0:10,
+    .f = \(i) 
+      read_lines(
+        str_glue("../fewshot_ids/madrs_item_{i}_no_test_sessions.txt")
+      ) |> 
+      basename()
+  )
+```
+
+```{r}
+# Collect total score labels and direct total score predictions 
+fewshot_total <- 
+  fewshot_raw[[1]] |> 
+  select(
+    session, patient, rater, model_name,
+    ground_truth, rating_0, rating_1, rating_2
+  ) |> 
+  filter(session %in% excluded_ids[[1]] == FALSE) |> 
+  summarize(
+    .by = c(session, patient, model_name),
+    label00 = mean(ground_truth) / 10,
+    direct00 = rowMeans(pick(rating_0, rating_1, rating_2), na.rm = TRUE) / 10
+  )
+```
+
+```{r}
+# Collect item score labels and item score predictions
+item_indices <- 2:11
+
+item_dfs <- map(
+  item_indices,
+  \(i) {
+    gt_name <- sprintf("label%02d", i-1)
+    pv_name <- sprintf("pred%02d", i-1)
+    fewshot_raw[[i]] |>
+      transmute(
+        session,
+        patient,
+        model_name,
+        !!gt_name := ground_truth,
+        !!pv_name := rowMeans(pick(rating_0, rating_1, rating_2), na.rm = TRUE)
+      ) |> 
+      filter(session %in% excluded_ids[[i]] == FALSE)
+  }
+)
+```
+
+```{r}
+# Combine collected data and calculate indirect total score predictions
+fewshot_all <- 
+  reduce(
+    item_dfs, 
+    ~ full_join(.x, .y, by = c("session", "patient", "model_name"))
+  ) |> 
+  mutate(
+    indirect00 = rowMeans(
+      pick(num_range(prefix = "pred", range = 1:10, width = 2)), 
+      na.rm = FALSE
+    )
+  ) |> 
+  full_join(fewshot_total, by = c("session", "patient", "model_name")) |> 
+  relocate(label00, .before = indirect00)
+```
+
+
+## Setup and Run Cluster Bootstrap Analysis
+
+```{r}
+cluster_boot_comparison <- function(
+  dat,
+  B    = 10000,
+  seed = 2026
+){
+  # --------------------------------------------------------------------------
+  # Helpers ------------------------------------------------------------------
+  # --------------------------------------------------------------------------
+  ccc_vec <- \(x, y) {
+    ok <- complete.cases(x, y)
+    x  <- x[ok]
+    y  <- y[ok]
+
+    # guard against tiny samples / no variance
+    if (length(x) < 2L) return(NA_real_)
+    var_x <- var(x)
+    var_y <- var(y)
+    if (var_x == 0 || var_y == 0) return(NA_real_)
+
+    mu_x   <- mean(x)
+    mu_y   <- mean(y)
+    cov_xy <- cov(x, y)
+    (2 * cov_xy) / (var_x + var_y + (mu_x - mu_y)^2)
+  }
+
+  calc_null_shifted_pvalue <- function(boot_dist, obs_val) {
+    boot_dist <- boot_dist[!is.na(boot_dist)]
+    if(length(boot_dist) == 0) return(NA_real_)
+    null_dist <- boot_dist - mean(boot_dist)
+    mean(abs(null_dist) >= abs(obs_val))
+  }
+
+  # --------------------------------------------------------------------------
+  # Pre-split by patient (cluster bootstrap units) ---------------------------
+  # --------------------------------------------------------------------------
+  patient_list <- dat |> group_split(patient, .keep = TRUE)
+  n_patients   <- length(patient_list)
+
+  # --------------------------------------------------------------------------
+  # Pre-pivot and Pre-split Data ---------------------------------------------
+  # --------------------------------------------------------------------------
+  items_long <-
+    dat |>
+    pivot_longer(
+      cols = matches("^(label|pred)(0[1-9]|10)$"),
+      names_to = c(".value", "suffix"),
+      names_pattern = "(label|pred)(0[1-9]|10)"
+    ) |>
+    mutate(comparison = paste0("item", suffix)) |>
+    select(model_name, patient, comparison, label, pred)
+
+  total_long <-
+    dat |>
+    select(model_name, patient, label00, direct00, indirect00) |>
+    pivot_longer(
+      cols = c(direct00, indirect00),
+      names_to = "comparison",
+      values_to = "pred"
+    ) |>
+    mutate(
+      comparison = if_else(comparison == "direct00", "00_direct", "00_indirect"),
+      label = label00
+    ) |>
+    select(model_name, patient, comparison, label, pred)
+
+  dat_long <- bind_rows(items_long, total_long)
+  patient_list <- dat_long |> group_split(patient, .keep = TRUE)
+  n_patients <- length(patient_list)
+
+  # --------------------------------------------------------------------------
+  # Simplified compute_stats -------------------------------------------------
+  # --------------------------------------------------------------------------
+  compute_stats <- function(df) {
+    df |>
+      summarise(
+        mae = mean(abs(pred - label), na.rm = TRUE),
+        ccc = ccc_vec(pred, label),
+        .by = c(model_name, comparison)
+      )
+  }
+
+  # --------------------------------------------------------------------------
+  # Observed (non-bootstrapped) estimates
+  # --------------------------------------------------------------------------
+  observed <- compute_stats(dat_long)
+
+  # --------------------------------------------------------------------------
+  # Bootstrap
+  # --------------------------------------------------------------------------
+  set.seed(seed)
+
+  boot_results <-
+    future_map(
+      seq_len(B),
+      \(b) {
+        idx  <- sample.int(n_patients, size = n_patients, replace = TRUE)
+        df_b <- bind_rows(patient_list[idx])
+        compute_stats(df_b) |> mutate(boot = b)
+      },
+      .progress = TRUE,
+      .options = furrr_options(
+        seed = TRUE, 
+        globals = c("patient_list", "compute_stats", "ccc_vec"),
+        packages = "dplyr"
+      )
+    ) |> 
+    list_rbind()
+
+  # --------------------------------------------------------------------------
+  # Bootstrap CIs for each model × comparison (MAE, CCC)
+  # --------------------------------------------------------------------------
+  boot_summary <-
+    boot_results |>
+    summarize(
+      mae_lower = quantile(mae, 0.025, na.rm = TRUE),
+      mae_upper = quantile(mae, 0.975, na.rm = TRUE),
+      ccc_lower = quantile(ccc, 0.025, na.rm = TRUE),
+      ccc_upper = quantile(ccc, 0.975, na.rm = TRUE),
+      .by = c(model_name, comparison)
+    )
+
+  # --------------------------------------------------------------------------
+  # Build item01 ... item10 data frames (one per item) -----------------------
+  # --------------------------------------------------------------------------
+  item_list <- lapply(1:10, function(k) {
+    comp <- paste0("item", sprintf("%02d", k))
+
+    obs_k  <- observed |> filter(comparison == comp)
+    boot_k <- boot_summary |> filter(comparison == comp)
+
+    obs_k |>
+      left_join(boot_k, by = c("model_name", "comparison")) |>
+      select(
+        model_name,
+        mae, mae_lower, mae_upper,
+        ccc, ccc_lower, ccc_upper
+      )
+  })
+  names(item_list) <- sprintf("item%02d", 1:10)
+
+  # --------------------------------------------------------------------------
+  # Item 00: direct vs indirect, wide + diffs + p-values ---------------------
+  # --------------------------------------------------------------------------
+  # Observed 00 (long)
+  observed00 <-
+    observed |>
+    filter(comparison %in% c("00_direct", "00_indirect"))
+
+  # Observed 00 (wide): per model, separate cols for direct/indirect
+  obs00_wide <-
+    observed00 |>
+    pivot_wider(
+      names_from  = comparison,
+      values_from = c(mae, ccc),
+      names_glue  = "{.value}_{comparison}"
+    )
+
+  # CIs for direct/indirect from bootstrap (still per comparison)
+  boot00 <-
+    boot_summary |>
+    filter(comparison %in% c("00_direct", "00_indirect"))
+
+  # Wide CIs: one row per model, columns for direct & indirect
+  boot00_wide <-
+    boot00 |>
+    pivot_wider(
+      names_from  = comparison,
+      values_from = c(mae_lower, mae_upper, ccc_lower, ccc_upper),
+      names_glue  = "{.value}_{comparison}"
+    )
+
+  # Observed differences (indirect - direct)
+  observed_diff <-
+    obs00_wide |>
+    mutate(
+      diff_mae_obs = mae_00_indirect - mae_00_direct,
+      diff_ccc_obs = ccc_00_indirect - ccc_00_direct
+    ) |>
+    select(model_name, diff_mae_obs, diff_ccc_obs)
+
+  # Bootstrap differences
+  boot_diff <-
+    boot_results |>
+    filter(comparison %in% c("00_direct", "00_indirect")) |>
+    pivot_wider(
+      names_from  = comparison,
+      values_from = c(mae, ccc),
+      names_glue  = "{.value}_{comparison}"
+    ) |>
+    mutate(
+      diff_mae = mae_00_indirect - mae_00_direct,
+      diff_ccc = ccc_00_indirect - ccc_00_direct
+    )
+
+  # CIs for differences
+  boot_diff_summary <-
+    boot_diff |>
+    summarize(
+      diff_mae_lower = quantile(diff_mae, 0.025, na.rm = TRUE),
+      diff_mae_upper = quantile(diff_mae, 0.975, na.rm = TRUE),
+      diff_ccc_lower = quantile(diff_ccc, 0.025, na.rm = TRUE),
+      diff_ccc_upper = quantile(diff_ccc, 0.975, na.rm = TRUE),
+      .by = model_name
+    )
+
+  # Two-sided bootstrap p-values for differences using null-shifted distribution
+  boot_diff_pvals <-
+    boot_diff |>
+    left_join(observed_diff, by = "model_name") |>
+    summarize(
+      p_diff_mae = calc_null_shifted_pvalue(diff_mae, first(diff_mae_obs)),
+      p_diff_ccc = calc_null_shifted_pvalue(diff_ccc, first(diff_ccc_obs)),
+      .by = model_name
+    )
+
+  # Assemble wide 00 table
+  item00 <-
+    obs00_wide |>
+    left_join(boot00_wide, by = "model_name") |>
+    left_join(observed_diff, by = "model_name") |>
+    left_join(boot_diff_summary, by = "model_name") |>
+    left_join(boot_diff_pvals, by = "model_name") |>
+    select(
+      model_name,
+
+      # Direct
+      mae_00_direct,
+      mae_lower_00_direct, mae_upper_00_direct,
+      ccc_00_direct,
+      ccc_lower_00_direct, ccc_upper_00_direct,
+
+      # Indirect
+      mae_00_indirect,
+      mae_lower_00_indirect, mae_upper_00_indirect,
+      ccc_00_indirect,
+      ccc_lower_00_indirect, ccc_upper_00_indirect,
+
+      # Differences & p-values
+      diff_mae_obs, diff_mae_lower, diff_mae_upper, p_diff_mae,
+      diff_ccc_obs, diff_ccc_lower, diff_ccc_upper, p_diff_ccc
+    )
+
+  # --------------------------------------------------------------------------
+  # Return: list of 11 elements (item01...item10, item00)
+  # --------------------------------------------------------------------------
+  c(item_list, list(item00 = item00))
+}
+```
+
+```{r boot}
+#| cache: true
+
+results <- cluster_boot_comparison(fewshot_all, B = 10000)
+```
+
+## Item Score Results
+
+### All model--item combinations
+
+```{r}
+#| results: asis
+
+walk(
+  1:10, 
+  \(i) {
+    tbl <- 
+      results[[i]] |> 
+      arrange(desc(ccc)) |> 
+      gt() |> 
+      tab_header(
+        title = str_glue("Item {fewshot_sheets[[i+1]]}")
+      ) |> 
+      fmt_number(
+        columns = -model_name,
+        decimals = 2
+      ) |> 
+      opt_row_striping() |> 
+      tab_options(data_row.padding = px(5))
+    
+    print(as_raw_html(tbl)) 
+    cat("\n\n") 
+  }
+)
+```
+
+### Summary table per model across items
+
+```{r}
+bind_rows(results[1:10], .id = "item") |> 
+  summarize(
+    .by = model_name,
+    mae_m = mean(mae),
+    mae_s = sd(mae),
+    ccc_m = mean(ccc),
+    ccc_s = sd(ccc)
+  ) |> 
+  arrange(desc(ccc_m)) |> 
+  gt() |> 
+  fmt_number(
+    columns = -model_name,
+    decimals = 2
+  ) |> 
+  opt_row_striping() |> 
+  tab_options(data_row.padding = px(5))
+```
+
+### Summary table per item across models
+
+```{r}
+bind_rows(results[1:10], .id = "item") |> 
+  summarize(
+    .by = item,
+    mae_m = mean(mae),
+    mae_s = sd(mae),
+    ccc_m = mean(ccc),
+    ccc_s = sd(ccc)
+  ) |> 
+  arrange(desc(ccc_m)) |> 
+  gt() |> 
+  fmt_number(
+    columns = -item,
+    decimals = 2
+  ) |> 
+  opt_row_striping() |> 
+  tab_options(data_row.padding = px(5))
+```
+
+### Figure per item for best overall model
+
+```{r}
+#| fig-height: 3.0
+#| fig-width: 6.5
+
+# Plot of best model
+bench1 <- 1.2
+bench2 <- 0.6
+bench3 <- 0.3
+
+item_plot_data <- 
+  bind_rows(results[1:10], .id = "item") |> 
+  filter(model_name == "Qwen 3 (22B-235B)")
+
+stripe_df <- 
+  item_plot_data |> 
+  mutate(
+    item = factor(
+      item, 
+      levels = sprintf("item%02d", 1:10),
+      labels = c(
+        "01: Reported Sadness",
+        "02: Apparent Sadness",
+        "03: Inner Tension",
+        "04: Reduced Sleep",
+        "05: Reduced Appetite",
+        "06: Concentration Difficulties",
+        "07: Lassitude",
+        "08: Inability to Feel",
+        "09: Pessimistic Thoughts",
+        "10: Suicidal Thoughts"
+      )
+    ),
+    item = fct_reorder(item, .x = mae, .desc = TRUE),
+    y_id  = as.numeric(item)
+  ) |>
+  filter(y_id %% 2 == 0) |>
+  transmute(
+    ymin = y_id - 0.5,
+    ymax = y_id + 0.5,
+    xmin = -Inf,
+    xmax =  Inf
+  )
+
+p1 <- 
+  item_plot_data |> 
+  mutate(
+    item = factor(
+      item, 
+      levels = sprintf("item%02d", 1:10),
+      labels = c(
+        "01: Apparent Sadness",
+        "02: Reported Sadness",
+        "03: Inner Tension",
+        "04: Reduced Sleep",
+        "05: Reduced Appetite",
+        "06: Concentration Difficulties",
+        "07: Lassitude",
+        "08: Inability to Feel",
+        "09: Pessimistic Thoughts",
+        "10: Suicidal Thoughts"
+      )
+    ),
+    item = fct_reorder(item, .x = mae, .desc = TRUE)
+  ) |> 
+  ggplot( 
+    aes(
+      x    = mae, 
+      xmin = mae_lower, 
+      xmax = mae_upper, 
+      y    = item
+    )
+  ) +
+  geom_rect(
+    data        = stripe_df,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    inherit.aes = FALSE,
+    fill        = "grey80",
+    alpha       = 0.3
+  ) +
+  geom_vline(xintercept = bench1, color = "#D73027", linewidth = 2/3) +
+  geom_vline(xintercept = bench2, color = "#FDAE61", linewidth = 2/3) +
+  geom_vline(xintercept = bench3, color = "#1A9850", linewidth = 2/3) +
+  geom_pointrange(linewidth = 2/3) +
+  scale_x_continuous(
+    limits = c(0, 1.8),
+    expand = c(0, 0),
+    breaks = seq(0, 1.8, 0.3)
+  ) +
+  labs(x = "Mean Absolute Error (MAE) with 95% CI", y = NULL) +
+  theme_bw(base_size = 10) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.x = element_line(linewidth = 1/2, linetype = "solid"),
+    panel.grid.minor.x = element_line(linewidth = 1/2, linetype = "dashed")
+  )
+```
+
+```{r}
+#| fig-height: 3.0
+#| fig-width: 6.5
+
+# Plot of best model
+bench1 <- 0.50
+bench2 <- 0.75
+bench3 <- 0.90
+
+item_plot_data <- 
+  bind_rows(results[1:10], .id = "item") |> 
+  filter(model_name == "Qwen 3 (22B-235B)")
+
+stripe_df <- 
+  item_plot_data |> 
+  mutate(
+    item = factor(
+      item, 
+      levels = sprintf("item%02d", 1:10),
+      labels = c(
+        "01: Reported Sadness",
+        "02: Apparent Sadness",
+        "03: Inner Tension",
+        "04: Reduced Sleep",
+        "05: Reduced Appetite",
+        "06: Concentration Difficulties",
+        "07: Lassitude",
+        "08: Inability to Feel",
+        "09: Pessimistic Thoughts",
+        "10: Suicidal Thoughts"
+      )
+    ),
+    item = fct_reorder(item, .x = ccc),
+    y_id  = as.numeric(item)
+  ) |>
+  filter(y_id %% 2 == 0) |>
+  transmute(
+    ymin = y_id - 0.5,
+    ymax = y_id + 0.5,
+    xmin = -Inf,
+    xmax =  Inf
+  )
+
+p2 <- 
+  item_plot_data |> 
+  mutate(
+    item = factor(
+      item, 
+      levels = sprintf("item%02d", 1:10),
+      labels = c(
+        "01: Apparent Sadness",
+        "02: Reported Sadness",
+        "03: Inner Tension",
+        "04: Reduced Sleep",
+        "05: Reduced Appetite",
+        "06: Concentration Difficulties",
+        "07: Lassitude",
+        "08: Inability to Feel",
+        "09: Pessimistic Thoughts",
+        "10: Suicidal Thoughts"
+      )
+    ),
+    item = fct_reorder(item, .x = ccc)
+  ) |> 
+  ggplot( 
+    aes(
+      x    = ccc, 
+      xmin = ccc_lower, 
+      xmax = ccc_upper, 
+      y    = item
+    )
+  ) +
+  geom_rect(
+    data        = stripe_df,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    inherit.aes = FALSE,
+    fill        = "grey80",
+    alpha       = 0.3
+  ) +
+  geom_vline(xintercept = bench1, color = "#D73027", linewidth = 2/3) +
+  geom_vline(xintercept = bench2, color = "#FDAE61", linewidth = 2/3) +
+  geom_vline(xintercept = bench3, color = "#1A9850", linewidth = 2/3) +
+  geom_pointrange(linewidth = 2/3) +
+  scale_x_continuous(
+    limits = c(0, 1),
+    expand = c(0, 0),
+    breaks = seq(0, 1, 0.2)
+  ) +
+  labs(x = "Concordance Correlation Coefficient (CCC) with 95% CI", y = NULL) +
+  theme_bw(base_size = 10) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.x = element_line(linewidth = 1/2, linetype = "solid"),
+    panel.grid.minor.x = element_line(linewidth = 1/2, linetype = "dashed")
+  )
+```
+
+```{r}
+(p1 / p2) + plot_annotation(tag_levels = "a", tag_suffix = ")")
+ggsave("best_item.pdf", width = 6.5, height = 6.0, units = "in")
+```
+
+## Total Score Results 
+
+### MAE results table and figure
+
+```{r}
+results[[11]] |> 
+  transmute(
+    model_name,
+    direct = mae_00_direct * 10,
+    direct_ci = sprintf("[%.1f, %.1f]", mae_lower_00_direct * 10, mae_upper_00_direct * 10),
+    indirect = mae_00_indirect * 10,
+    indirect_ci = sprintf("[%.1f, %.1f]", mae_lower_00_indirect * 10, mae_upper_00_indirect * 10),
+    diff = diff_mae_obs * 10,
+    diff_ci = sprintf("[%.1f, %.1f]", diff_mae_lower * 10, diff_mae_upper * 10),
+    p_adj = p.adjust(p_diff_mae, method = "fdr"),
+    sig = if_else(p_adj < .05, "*", "")
+  ) |> 
+  arrange(indirect) |> 
+  gt() |> 
+  fmt_number(columns = c(direct, indirect, diff), decimals = 1) |> 
+  fmt_number(columns = p_adj, decimals = 4) |> 
+  cols_align(align = "center", columns = -model_name) |> 
+  opt_row_striping() |> 
+  tab_options(data_row.padding = px(5))
+```
+
+```{r}
+#| fig-height: 6.0
+#| fig-width: 6.5
+
+bench1 <- 12
+bench2 <- 06
+bench3 <- 03
+
+total_plot_data <- 
+  results[[11]] |> 
+  transmute(
+    model_name,
+    mae = mae_00_indirect * 10,
+    mae_lower = mae_lower_00_indirect * 10,
+    mae_upper = mae_upper_00_indirect * 10
+  )
+
+stripe_df <- 
+  total_plot_data |> 
+  mutate(
+    model = fct_reorder(model_name, .x = mae, .desc = TRUE),
+    y_id  = as.numeric(model)
+  ) |>
+  filter(y_id %% 2 == 0) |>
+  transmute(
+    ymin = y_id - 0.5,
+    ymax = y_id + 0.5,
+    xmin = -Inf,
+    xmax =  Inf
+  )
+
+p1 <- 
+  total_plot_data |> 
+  mutate(
+    model = fct_reorder(model_name, .x = mae, .desc = TRUE),
+  ) |> 
+  ggplot( 
+    aes(
+      x    = mae, 
+      xmin = mae_lower, 
+      xmax = mae_upper, 
+      y    = model
+    )
+  ) +
+  geom_rect(
+    data        = stripe_df,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    inherit.aes = FALSE,
+    fill        = "grey80",
+    alpha       = 0.3
+  ) +
+  geom_vline(xintercept = bench1, color = "#D73027", linewidth = 2/3) +
+  geom_vline(xintercept = bench2, color = "#FDAE61", linewidth = 2/3) +
+  geom_vline(xintercept = bench3, color = "#1A9850", linewidth = 2/3) +
+  geom_pointrange(linewidth = 2/3) +
+  scale_x_continuous(
+    limits = c(0, 15),
+    expand = c(0, 0),
+    breaks = seq(0, 15, 3)
+  ) +
+  labs(x = "Mean Absolute Error (MAE) with 95% CI", y = NULL) +
+  theme_bw(base_size = 10) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.x = element_line(linewidth = 1/2, linetype = "solid"),
+    panel.grid.minor.x = element_line(linewidth = 1/2, linetype = "dashed")
+  )
+p1
+ggsave("mae_indirect.pdf", width = 6.5, height = 6.0, units = "in")
+```
+
+### CCC results table and figure
+
+```{r}
+results[[11]] |> 
+  transmute(
+    model_name,
+    direct = ccc_00_direct,
+    direct_ci = sprintf("[%.2f, %.2f]", ccc_lower_00_direct, ccc_upper_00_direct),
+    indirect = ccc_00_indirect,
+    indirect_ci = sprintf("[%.2f, %.2f]", ccc_lower_00_indirect, ccc_upper_00_indirect),
+    diff = diff_ccc_obs,
+    diff_ci = sprintf("[%.2f, %.2f]", diff_ccc_lower, diff_ccc_upper),
+    p_adj = p.adjust(p_diff_ccc, method = "fdr"),
+    sig = if_else(p_adj < .05, "*", "")
+  ) |> 
+  arrange(desc(indirect)) |> 
+  gt() |> 
+  fmt_number(columns = c(direct, indirect, diff), decimals = 2) |> 
+  fmt_number(columns = p_adj, decimals = 3) |> 
+  cols_align(align = "center", columns = -model_name) |> 
+  opt_row_striping() |> 
+  tab_options(data_row.padding = px(5))
+```
+
+```{r}
+#| fig-height: 6.0
+#| fig-width: 6.5
+
+# Plot of best model
+bench1 <- 0.50
+bench2 <- 0.75
+bench3 <- 0.90
+
+total_plot_data <- 
+  results[[11]] |> 
+  transmute(
+    model_name,
+    ccc = ccc_00_indirect,
+    ccc_lower = ccc_lower_00_indirect,
+    ccc_upper = ccc_upper_00_indirect
+  )
+
+stripe_df <- 
+  total_plot_data |> 
+  mutate(
+    model = fct_reorder(model_name, .x = ccc, .desc = FALSE),
+    y_id  = as.numeric(model)
+  ) |>
+  filter(y_id %% 2 == 0) |>
+  transmute(
+    ymin = y_id - 0.5,
+    ymax = y_id + 0.5,
+    xmin = -Inf,
+    xmax =  Inf
+  )
+
+p1 <- 
+  total_plot_data |> 
+  mutate(
+    model = fct_reorder(model_name, .x = ccc, .desc = FALSE),
+  ) |> 
+  ggplot( 
+    aes(
+      x    = ccc, 
+      xmin = ccc_lower, 
+      xmax = ccc_upper, 
+      y    = model
+    )
+  ) +
+  geom_rect(
+    data = stripe_df,
+    aes(xmin = xmin, xmax = xmax, ymin = ymin, ymax = ymax),
+    inherit.aes = FALSE,
+    fill = "grey80",
+    alpha = 0.3
+  ) +
+  geom_vline(xintercept = bench1, color = "#D73027", linewidth = 2/3) +
+  geom_vline(xintercept = bench2, color = "#FDAE61", linewidth = 2/3) +
+  geom_vline(xintercept = bench3, color = "#1A9850", linewidth = 2/3) +
+  geom_pointrange(linewidth = 2/3) +
+  scale_x_continuous(
+    limits = c(0, 1),
+    expand = c(0, 0),
+    breaks = seq(0, 1, 0.2)
+  ) +
+  labs(x = "Concordance Correlation Coefficient (CCC) with 95% CI", y = NULL) +
+  theme_bw(base_size = 10) +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(),
+    panel.grid.major.x = element_line(linewidth = 1/2, linetype = "solid"),
+    panel.grid.minor.x = element_line(linewidth = 1/2, linetype = "dashed")
+  )
+p1
+ggsave("ccc_indirect.pdf", width = 6.5, height = 6.0, units = "in")
+```
+
+## Directional Error
+
+```{r}
+best_model_data <- 
+  fewshot_all |>
+  filter(model_name == "Qwen 3 (22B-235B)") |>
+  mutate(
+    # Multiply by 10 to convert back to the 0-60 total score scale
+    label = label00 * 10,
+    pred = indirect00 * 10
+  )
+directional_summary <- 
+  best_model_data |>
+  mutate(
+    severity_bin = case_when(
+      label <= 6 ~ "Normal (0-6)",
+      label >= 7 & label <= 19 ~ "Mild (7-19)",
+      label >= 20 & label <= 34 ~ "Moderate (20-34)",
+      label >= 35 ~ "Severe (35-60)",
+      .default = NA_character_
+    ),
+    severity_bin = fct_relevel(
+      severity_bin, 
+      "Normal (0-6)", "Mild (7-19)", "Moderate (20-34)", "Severe (35-60)"
+    ),
+    error = pred - label,
+    abs_error = abs(error)
+  ) |>
+  filter(!is.na(severity_bin)) |>
+  summarize(
+    .by = severity_bin,
+    mean_error = mean(error, na.rm = TRUE),
+    mae = mean(abs_error, na.rm = TRUE),
+    n = n()
+  ) |> 
+  arrange(severity_bin)
+
+# Create the styled gt table
+directional_summary |>
+  gt() |>
+  tab_header(
+    title = "Directional Error Analysis by Clinical Severity",
+    subtitle = "Analysis of Prediction Bias and Accuracy for Qwen 3 (22B-235B)"
+  ) |>
+  cols_label(
+    severity_bin = "Severity Range",
+    mean_error = "Mean Error (Bias)",
+    mae = "MAE",
+    n = "Sample Size (N)"
+  ) |>
+  fmt_number(
+    columns = c(mean_error, mae),
+    decimals = 2
+  ) |>
+  # Apply a color scale to Mean Error to highlight over/underestimation
+  data_color(
+    columns = mean_error,
+    palette = c("#2166ac", "white", "#b2182b"), # Blue (under) to Red (over)
+    domain = c(-6, 6) # Adjust this range based on your typical error spread
+  ) |>
+  cols_align(
+    align = "center",
+    columns = -severity_bin
+  ) |>
+  tab_source_note(
+    source_note = "Note: Positive Mean Error indicates overestimation; negative indicates underestimation."
+  ) |>
+  opt_row_striping() |>
+  tab_options(
+    heading.title.font.size = px(20),
+    column_labels.font.weight = "bold",
+    data_row.padding = px(8)
+  )
+```

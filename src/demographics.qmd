@@ -1,0 +1,141 @@
+---
+title: "Sample Demographics"
+author: "Jeff Girard"
+date: "2025-12-03"
+format: html
+---
+
+```{r setup}
+#| message: false
+
+library(tidyverse)
+library(readxl)
+library(datawizard)
+library(kableExtra)
+```
+
+```{r}
+obs_file <- "madrs_predictions_by_video_fewshot_small.xlsx"
+obs_raw <- read_xlsx(obs_file, sheet = 1)
+
+demo_file <- "cami_demographics.xlsx"
+demo_raw <- read_xlsx(demo_file, sheet = 1)
+```
+
+## Session Summaries
+
+```{r}
+obs_tidy <- 
+  obs_raw |> 
+  select(
+    patient, 
+    session,
+    visit_no,
+    madrs = ground_truth
+  ) |> 
+  summarize(
+    .by = c(patient, session, visit_no),
+    madrs = first(madrs)
+  )
+```
+
+```{r}
+obs_tidy |> 
+  describe_distribution(select = "madrs") |> 
+  print_md()
+
+obs_tidy |> 
+  summarize(.by = patient, n_sessions = n()) |> 
+  describe_distribution(select = "n_sessions") |> 
+  print_md()
+```
+
+```{r}
+ggplot(obs_tidy, aes(x = visit_no)) + 
+  geom_bar() +
+  scale_x_continuous(breaks = 1:8) +
+  labs(x = "Visit Number", y = "Number of Sessions") +
+  theme_bw(base_size = 10)
+```
+
+```{r}
+bin_width <- 5
+n_obs <- nrow(obs_tidy)
+
+ggplot(obs_tidy, aes(x = madrs)) + 
+  geom_histogram(
+    breaks = seq(0, 60, bin_width), 
+    color = "black",
+    fill  = "grey80"
+  ) +
+  geom_density(
+    aes(y = after_stat(density * n_obs * bin_width)),
+    color    = "blue",
+    linewidth = 1
+  ) +
+  labs(
+    x = "MADRS Total Score",
+    y = "Number of Sessions"
+  ) +
+  theme_bw(base_size = 10)
+```
+
+
+## Patient Summaries
+
+```{r}
+demo_tidy <- 
+  demo_raw |> 
+  transmute(
+    patient = Record.ID,
+    diagnosis = fct_collapse(
+      Diagnosis.at.Admission,
+      bipolar = c("BP1 (depressed)", "BP1 (hypomanic)", "BP1 (manic)", "BP1 (mixed)", "BP2 (depressed)", "BP2 (hypomanic)", "BP NOS"),
+      major_depressive = c("MDD", "MDD w/ psychosis"),
+      schizophrenia = "SZ",
+      schizoaffective = c("SZA (bp)", "SZA (dep)"),
+      psychosis_nos = "Psychosis NOS",
+      other = "Other"
+    ),
+    sex = factor(Sex),
+    race = fct_lump_prop(
+      Race,
+      prop = 0.01
+    ),
+    ethnicity = factor(Ethnicity),
+    education = factor(
+      Education,
+      levels = c(
+        "Less than High School",
+        "High School/GED",
+        "Part College or 2-year degree",
+        "4-year College degree",
+        "Part or completed Graduate degree",
+        "Prefer not to answer/Unknown"
+      )
+    ),
+    age = Age
+  ) |> 
+  filter(patient %in% unique(obs_tidy$patient)) |> 
+  mutate(patient = factor(patient)) |> 
+  summarize(
+    .by = patient,
+    across(everything(), first)
+  )
+```
+
+
+```{r}
+demo_tidy |> 
+  describe_distribution(select = "age") |> 
+  print_md()
+```
+
+```{r}
+demo_tidy |> 
+  data_tabulate(
+    select = c("sex", "race", "ethnicity", "education", "diagnosis")
+  ) |> 
+  print_md()
+```
+

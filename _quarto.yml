@@ -1,0 +1,27 @@
+project:
+  type: website
+  output-dir: docs
+  # Only the landing page is rendered; the analysis reports are pre-rendered
+  # HTML and the src/ qmd files are downloadable sources (they cannot execute
+  # here because the study data are not included in this repository)
+  render:
+    - index.qmd
+  resources:
+    - "analyses/*.html"
+    - "analyses/*_files/**"
+    - "src/*.qmd"
+
+website:
+  title: "LLM Depression Assessment: Supplemental Materials"
+  navbar:
+    left:
+      - href: index.qmd
+        text: Home
+    right:
+      - icon: github
+        href: https://github.com/jmgirard/llm-depression-assessment
+
+format:
+  html:
+    theme: cosmo
+    toc: true
