@@ -21,6 +21,8 @@ website:
     right:
       - icon: github
         href: https://github.com/jmgirard/llm-depression-assessment
+  page-footer:
+    center: "Code: [MIT](https://github.com/jmgirard/llm-depression-assessment/blob/main/LICENSE) · Content: [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)"
 
 format:
   html:

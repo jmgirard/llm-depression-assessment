@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+message: "If you use these materials, please cite the article below."
+title: "Supplemental materials for \"Evaluating Open-Weight Large Language Models for Structured Depression Assessment from Clinical Interviews\""
+type: software
+authors:
+  - family-names: Girard
+    given-names: Jeffrey M.
+    orcid: "https://orcid.org/0000-0002-7359-3746"
+    affiliation: "University of Kansas"
+version: 1.0.0
+date-released: "2026-09-28"
+license: MIT
+repository-code: "https://github.com/jmgirard/llm-depression-assessment"
+url: "https://jmgirard.github.io/llm-depression-assessment/"
+keywords:
+  - large language models
+  - depression
+  - clinical assessment
+  - MADRS
+  - algorithmic fairness
+preferred-citation:
+  type: article
+  title: "Evaluating Open-Weight Large Language Models for Structured Depression Assessment from Clinical Interviews"
+  authors:
+    - family-names: Girard
+      given-names: Jeffrey M.
+      orcid: "https://orcid.org/0000-0002-7359-3746"
+    - family-names: Kebe
+      given-names: Gaoussou Youssouf
+      orcid: "https://orcid.org/0000-0003-4260-3961"
+    - family-names: Morency
+      given-names: Louis-Philippe
+    - family-names: De la Torre
+      given-names: Fernando
+    - family-names: Liebenthal
+      given-names: Einat
+    - family-names: Baker
+      given-names: Justin T.
+  journal: "Journal of Psychopathology and Clinical Science"
+  year: 2026
