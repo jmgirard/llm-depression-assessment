@@ -7,6 +7,22 @@ authors:
     given-names: Jeffrey M.
     orcid: "https://orcid.org/0000-0002-7359-3746"
     affiliation: "University of Kansas"
+  - family-names: Kebe
+    given-names: Gaoussou Youssouf
+    orcid: "https://orcid.org/0000-0003-4260-3961"
+    affiliation: "Carnegie Mellon University"
+  - family-names: Morency
+    given-names: Louis-Philippe
+    affiliation: "Carnegie Mellon University"
+  - family-names: De la Torre
+    given-names: Fernando
+    affiliation: "Carnegie Mellon University"
+  - family-names: Liebenthal
+    given-names: Einat
+    affiliation: "McLean Hospital; Harvard Medical School"
+  - family-names: Baker
+    given-names: Justin T.
+    affiliation: "McLean Hospital; Harvard Medical School"
 version: 1.0.0
 date-released: "2026-09-28"
 license: MIT
