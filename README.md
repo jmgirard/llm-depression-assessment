@@ -1,5 +1,7 @@
 # LLM Depression Assessment: Supplemental Materials
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23022179.svg)](https://doi.org/10.5281/zenodo.23022179)
+
 Supplemental analysis reports and source code for:
 
 > Girard, J. M., Kebe, G. Y., Morency, L.-P., De la Torre, F., Liebenthal, E., & Baker, J. T. (in press). Evaluating open-weight large language models for structured depression assessment from clinical interviews. *Journal of Psychopathology and Clinical Science*.
@@ -32,5 +34,8 @@ Data Availability statement on the site.
 
 ## Citation
 
-Please cite the article above. An archived, citable version of these materials
-is available on Zenodo; see [CITATION.cff](CITATION.cff).
+Please cite the article above. The version of these materials cited in the
+article is archived on Zenodo as **v1.0.0**:
+[doi:10.5281/zenodo.23022180](https://doi.org/10.5281/zenodo.23022180). The DOI
+badge above always resolves to the most recent archived version. See also
+[CITATION.cff](CITATION.cff).

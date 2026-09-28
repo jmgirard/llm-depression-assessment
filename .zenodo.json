@@ -1,7 +1,7 @@
 {
   "title": "Supplemental materials for \"Evaluating Open-Weight Large Language Models for Structured Depression Assessment from Clinical Interviews\"",
   "upload_type": "software",
-  "description": "<p>Analysis code (Quarto source files) and rendered analysis reports supporting the article \"Evaluating Open-Weight Large Language Models for Structured Depression Assessment from Clinical Interviews\" (Journal of Psychopathology and Clinical Science). Reports cover model benchmarking, a psychometric fairness audit, a prompt ablation study, and a cross-model ensemble comparison.</p><p>Source code is licensed under the MIT License; rendered reports and other non-code content are licensed under CC BY 4.0 (see LICENSE and LICENSE-CC-BY.md in the archive). The interview recordings and transcripts analyzed in the study contain protected health information and are not included.</p>",
+  "description": "<p>Browse the analysis reports online at <a href=\"https://jmgirard.github.io/llm-depression-assessment/\">https://jmgirard.github.io/llm-depression-assessment/</a>. This record is the archived, citable copy.</p><p>Analysis code (Quarto source files) and rendered analysis reports supporting the article \"Evaluating Open-Weight Large Language Models for Structured Depression Assessment from Clinical Interviews\" (Journal of Psychopathology and Clinical Science). Reports cover model benchmarking, a psychometric fairness audit, a prompt ablation study, and a cross-model ensemble comparison.</p><p>Source code is licensed under the MIT License; rendered reports and other non-code content are licensed under CC BY 4.0 (see LICENSE and LICENSE-CC-BY.md in the archive). The interview recordings and transcripts analyzed in the study contain protected health information and are not included.</p>",
   "creators": [
     {
       "name": "Girard, Jeffrey M.",
@@ -41,8 +41,8 @@
   ],
   "related_identifiers": [
     {
-      "identifier": "https://github.com/jmgirard/llm-depression-assessment",
-      "relation": "isSupplementTo",
+      "identifier": "https://jmgirard.github.io/llm-depression-assessment/",
+      "relation": "isDocumentedBy",
       "scheme": "url"
     }
   ]

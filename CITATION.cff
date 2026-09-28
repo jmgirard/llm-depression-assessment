@@ -25,6 +25,14 @@ authors:
     affiliation: "McLean Hospital; Harvard Medical School"
 version: 1.0.0
 date-released: "2026-09-28"
+doi: 10.5281/zenodo.23022180
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23022180
+    description: "Archived version cited in the article (v1.0.0)"
+  - type: doi
+    value: 10.5281/zenodo.23022179
+    description: "Concept DOI; always resolves to the latest archived version"
 license: MIT
 repository-code: "https://github.com/jmgirard/llm-depression-assessment"
 url: "https://jmgirard.github.io/llm-depression-assessment/"

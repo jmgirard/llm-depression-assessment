@@ -7,6 +7,15 @@ This site hosts the supplemental analysis reports and source code for:
 
 > Girard, J. M., Kebe, G. Y., Morency, L.-P., De la Torre, F., Liebenthal, E., & Baker, J. T. (in press). Evaluating open-weight large language models for structured depression assessment from clinical interviews. *Journal of Psychopathology and Clinical Science*.
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23022179.svg)](https://doi.org/10.5281/zenodo.23022179)
+
+## Archived Version
+
+A frozen, citable copy of these materials is archived on Zenodo. The version
+cited in the article is **v1.0.0**:
+[doi:10.5281/zenodo.23022180](https://doi.org/10.5281/zenodo.23022180). The
+badge above always points to the most recent archived version.
+
 ## Analysis Reports
 
 Each report is a rendered Quarto document containing the complete analysis code
@@ -23,11 +32,13 @@ and output. The corresponding source files (`.qmd`) are available in the
 ## Data Availability
 
 The interview recordings and transcripts analyzed in this work cannot be
-publicly shared because they contain identifiable protected health information
-from psychiatric inpatients. The analysis reports above include all code
-required to reproduce the reported results; the deidentified model prediction
-files they operate on are available from the corresponding author upon
-reasonable request.
+shared because they contain identifiable protected health information from
+psychiatric inpatients. The deidentified model predictions and analysis data
+derived from them are not publicly available but may be made available to
+qualified researchers upon reasonable request to the corresponding author,
+subject to approval by the Mass General Brigham Institutional Review Board and
+execution of a data use agreement. The analysis reports above include all code
+required to reproduce the reported results.
 
 ## Contact
 

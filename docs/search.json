@@ -7,6 +7,13 @@
     "text": "This site hosts the supplemental analysis reports and source code for:"
   },
   {
+    "objectID": "index.html#archived-version",
+    "href": "index.html#archived-version",
+    "title": "Supplemental Materials",
+    "section": "Archived Version",
+    "text": "Archived Version\nA frozen, citable copy of these materials is archived on Zenodo. The version cited in the article is v1.0.0: doi:10.5281/zenodo.23022180. The badge above always points to the most recent archived version."
+  },
+  {
     "objectID": "index.html#analysis-reports",
     "href": "index.html#analysis-reports",
     "title": "Supplemental Materials",
@@ -18,7 +25,7 @@
     "href": "index.html#data-availability",
     "title": "Supplemental Materials",
     "section": "Data Availability",
-    "text": "Data Availability\nThe interview recordings and transcripts analyzed in this work cannot be publicly shared because they contain identifiable protected health information from psychiatric inpatients. The analysis reports above include all code required to reproduce the reported results; the deidentified model prediction files they operate on are available from the corresponding author upon reasonable request."
+    "text": "Data Availability\nThe interview recordings and transcripts analyzed in this work cannot be shared because they contain identifiable protected health information from psychiatric inpatients. The deidentified model predictions and analysis data derived from them are not publicly available but may be made available to qualified researchers upon reasonable request to the corresponding author, subject to approval by the Mass General Brigham Institutional Review Board and execution of a data use agreement. The analysis reports above include all code required to reproduce the reported results."
   },
   {
     "objectID": "index.html#contact",
