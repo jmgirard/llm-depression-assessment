@@ -28,6 +28,9 @@ date-released: "2026-09-28"
 doi: 10.5281/zenodo.23022179
 identifiers:
   - type: doi
+    value: 10.5281/zenodo.23029765
+    description: "v1.1.0, the version cited in the article"
+  - type: doi
     value: 10.5281/zenodo.23022180
     description: "v1.0.0 (analysis code and reports only)"
   - type: doi

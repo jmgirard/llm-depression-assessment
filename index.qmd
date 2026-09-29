@@ -13,8 +13,10 @@ A preprint of the article is available on
 ## Archived Version
 
 Frozen, citable copies of these materials are archived on Zenodo. The version
-cited in the article is **v1.1.0**, which adds the model predictions to the
-analysis code and reports archived in v1.0.0. The badge below always points to
+cited in the article is **v1.1.0**
+([doi:10.5281/zenodo.23029765](https://doi.org/10.5281/zenodo.23029765)),
+which adds the model predictions to the analysis code and reports archived in
+v1.0.0. The badge below always points to
 the most recent archived version.
 
 [![](https://zenodo.org/badge/DOI/10.5281/zenodo.23022179.svg){fig-alt="DOI badge for the latest archived version"}](https://doi.org/10.5281/zenodo.23022179)
