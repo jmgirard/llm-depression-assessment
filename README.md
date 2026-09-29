@@ -23,10 +23,11 @@ Preprint: https://osf.io/preprints/psyarxiv/63sw4
 The model predictions are in `data/` (see [data/README.md](data/README.md)).
 The human MADRS ratings and participant characteristics they are evaluated
 against are available under controlled access from the NIMH Data Archive
-(NDA), collection 3860.
+(NDA), [collection 3860](https://nda.nih.gov/edit_collection.html?id=3860).
 
-1. Obtain NDA access and download the `madrs01` and `ndar_subject01`
-   structures for collection 3860 as `madrs01.txt` and `ndar_subject01.txt`.
+1. Obtain NDA access ([how to request access](https://nda.nih.gov/nda/access-data-info)) and download the
+   `madrs01` and `ndar_subject01` structures from
+   [collection 3860](https://nda.nih.gov/edit_collection.html?id=3860) as `madrs01.txt` and `ndar_subject01.txt`.
 2. Store them on storage approved under your NDA Data Use Certification, and
    point `NDA_DIR` at that folder. Fitted models embed the analysis data, so
    point `FITS_DIR` at approved storage too. For example, in `~/.Renviron`:

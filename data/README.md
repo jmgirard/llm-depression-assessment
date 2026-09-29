@@ -2,7 +2,8 @@
 
 Model predictions analyzed in the article. Human MADRS ratings, demographics,
 and admission diagnoses for the same participants are available under
-controlled access in the NIMH Data Archive (NDA), collection 3860; see
+controlled access in the NIMH Data Archive (NDA),
+[collection 3860](https://nda.nih.gov/edit_collection.html?id=3860); see
 [Linking to NDA](#linking-to-nda) below.
 
 These files contain no interview dates, GUIDs, human ratings, demographics, or
@@ -51,8 +52,9 @@ served as an example for any item.
 
 ## Linking to NDA
 
-Researchers with NDA access can obtain the following for these participants
-from collection 3860 and join them to these files on `src_subject_id` (and
+Researchers with NDA access ([how to request access](https://nda.nih.gov/nda/access-data-info)) can obtain
+the following for these participants from
+[collection 3860](https://nda.nih.gov/edit_collection.html?id=3860) and join them to these files on `src_subject_id` (and
 visit, for session-level data):
 
 | Needed for | NDA structure | Fields |
