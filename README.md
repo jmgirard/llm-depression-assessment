@@ -1,6 +1,6 @@
 # LLM Depression Assessment: Supplemental Materials
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23022179.svg)](https://doi.org/10.5281/zenodo.23022179)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23029765.svg)](https://doi.org/10.5281/zenodo.23029765)
 
 Supplemental analysis reports and source code for:
 
@@ -58,5 +58,4 @@ quarto render
 Please cite the article above. The version of these materials cited in the
 article is archived on Zenodo as **v1.1.0**
 ([doi:10.5281/zenodo.23029765](https://doi.org/10.5281/zenodo.23029765)), which adds the model predictions to
-the code and reports archived in v1.0.0. The DOI badge above always resolves to
-the most recent archived version. See also [CITATION.cff](CITATION.cff).
+the code and reports archived in v1.0.0. See also [CITATION.cff](CITATION.cff).
