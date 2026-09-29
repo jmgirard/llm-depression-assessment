@@ -19,7 +19,6 @@ Prompted by an editor suggestion during review at JPCS.
 #| message: false
 
 library(tidyverse)
-library(readxl)
 library(gt)
 
 ccc <- function(x, y) {
@@ -33,29 +32,23 @@ ccc <- function(x, y) {
 ## Prep Data
 
 ```{r xids}
-# Look up which sessions were used as fewshot examples (to exclude them)
-excluded_ids <-
-  map(
-    .x = 0:10,
-    .f = \(i)
-      read_lines(
-        str_glue("../../fewshot_ids/madrs_item_{i}_no_test_sessions.txt")
-      ) |>
-      basename()
-  )
+# Sessions used as fewshot examples (excluded from evaluation)
+source("load_data.R")
+excluded_ids <- load_exemplars()
 
 # Sessions excluded from any item's evaluation (union across items 1-10)
 union_excl <- reduce(excluded_ids[2:11], union)
 ```
 
 ```{r ens-data}
-main_input <- "../../madrs_predictions_by_video_fewshot_small.xlsx"
+# Predictions (public, ../data) joined to human ratings (NDA, ../nda)
+main_sheets <- load_prediction_sheets(conditions = "full")
 
 ens_items <-
   map(
     .x = 1:10,
     .f = \(i) {
-      read_xlsx(main_input, sheet = i + 1) |>
+      main_sheets[[i + 1]] |>
         filter(session %in% excluded_ids[[i + 1]] == FALSE) |>
         transmute(
           session,

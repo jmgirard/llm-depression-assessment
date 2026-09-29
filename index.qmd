@@ -7,12 +7,15 @@ This site hosts the supplemental analysis reports and source code for:
 
 > Girard, J. M., Kebe, G. Y., Morency, L.-P., De la Torre, F., Liebenthal, E., & Baker, J. T. (in press). Evaluating open-weight large language models for structured depression assessment from clinical interviews. *Journal of Psychopathology and Clinical Science*.
 
+A preprint of the article is available on
+[PsyArXiv](https://osf.io/preprints/psyarxiv/63sw4).
+
 ## Archived Version
 
-A frozen, citable copy of these materials is archived on Zenodo. The version
-cited in the article is **v1.0.0**:
-[doi:10.5281/zenodo.23022180](https://doi.org/10.5281/zenodo.23022180). The
-badge below always points to the most recent archived version.
+Frozen, citable copies of these materials are archived on Zenodo. The version
+cited in the article is **v1.1.0**, which adds the model predictions to the
+analysis code and reports archived in v1.0.0. The badge below always points to
+the most recent archived version.
 
 [![](https://zenodo.org/badge/DOI/10.5281/zenodo.23022179.svg){fig-alt="DOI badge for the latest archived version"}](https://doi.org/10.5281/zenodo.23022179)
 
@@ -28,17 +31,22 @@ and output. The corresponding source files (`.qmd`) are available in the
 | [Fairness Analyses](analyses/fairness_analyses.html) | Psychometric fairness audit (bias, sensitivity, precision) across sex, age, race, education, primary diagnosis, and interviewer |
 | [Ablation Analyses](analyses/ablation_analyses.html) | Prompt ablation study isolating the contributions of descriptive and demonstrative cues |
 | [Ensemble Analyses](analyses/ensemble_analyses.html) | Comparison of cross-model ensemble aggregation to the best single model |
+| [Sample Demographics](analyses/demographics.html) | Participant and session descriptive statistics (Table 1) |
 
 ## Data Availability
 
-The interview recordings and transcripts analyzed in this work cannot be
-shared because they contain identifiable protected health information from
-psychiatric inpatients. The deidentified model predictions and analysis data
-derived from them are not publicly available but may be made available to
-qualified researchers upon reasonable request to the corresponding author,
-subject to approval by the Mass General Brigham Institutional Review Board and
-execution of a data use agreement. The analysis reports above include all code
-required to reproduce the reported results.
+The model predictions analyzed in this work are openly available in the
+[data folder](https://github.com/jmgirard/llm-depression-assessment/tree/main/data),
+with a codebook describing each file (CC BY 4.0).
+
+The interview transcripts, human MADRS ratings, and participant
+characteristics needed to reproduce the analyses are available to qualified
+researchers through the [NIMH Data Archive](https://nda.nih.gov/) (collection
+3860) under an NDA Data Use Certification. The public predictions link to these
+records through their NDA subject identifiers; the codebook lists the NDA
+structures and fields used. The interview recordings cannot be shared because
+they contain identifiable protected health information from psychiatric
+inpatients.
 
 ## Contact
 

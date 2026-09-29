@@ -1,7 +1,7 @@
 {
   "title": "Supplemental materials for \"Evaluating Open-Weight Large Language Models for Structured Depression Assessment from Clinical Interviews\"",
-  "upload_type": "software",
-  "description": "<p>Browse the analysis reports online at <a href=\"https://jmgirard.github.io/llm-depression-assessment/\">https://jmgirard.github.io/llm-depression-assessment/</a>. This record is the archived, citable copy.</p><p>Analysis code (Quarto source files) and rendered analysis reports supporting the article \"Evaluating Open-Weight Large Language Models for Structured Depression Assessment from Clinical Interviews\" (Journal of Psychopathology and Clinical Science). Reports cover model benchmarking, a psychometric fairness audit, a prompt ablation study, and a cross-model ensemble comparison.</p><p>Source code is licensed under the MIT License; rendered reports and other non-code content are licensed under CC BY 4.0 (see LICENSE and LICENSE-CC-BY.md in the archive). The interview recordings and transcripts analyzed in the study contain protected health information and are not included.</p>",
+  "upload_type": "dataset",
+  "description": "<p>Browse the analysis reports online at <a href=\"https://jmgirard.github.io/llm-depression-assessment/\">https://jmgirard.github.io/llm-depression-assessment/</a>. This record is the archived, citable copy.</p><p>Model predictions, analysis code (Quarto source files), and rendered analysis reports supporting the article \"Evaluating Open-Weight Large Language Models for Structured Depression Assessment from Clinical Interviews\" (Journal of Psychopathology and Clinical Science). The data/ folder contains the predictions of 25 open-weight large language models for Montgomery-Åsberg Depression Rating Scale items and total scores, keyed by NIMH Data Archive (NDA) subject identifiers, with a codebook. Reports cover model benchmarking, a psychometric fairness audit, a prompt ablation study, a cross-model ensemble comparison, and sample descriptives.</p><p>The interview transcripts, human ratings, and participant characteristics needed to reproduce the analyses are available to qualified researchers through NDA collection 3860 under an NDA Data Use Certification. The interview recordings contain protected health information and are not included.</p><p>Data and rendered reports are licensed under CC BY 4.0; source code is licensed under the MIT License (see LICENSE and LICENSE-CC-BY.md in the archive).</p>",
   "creators": [
     {
       "name": "Girard, Jeffrey M.",
@@ -37,12 +37,19 @@
     "depression",
     "clinical assessment",
     "MADRS",
-    "algorithmic fairness"
+    "algorithmic fairness",
+    "model predictions",
+    "NIMH Data Archive"
   ],
   "related_identifiers": [
     {
       "identifier": "https://jmgirard.github.io/llm-depression-assessment/",
       "relation": "isDocumentedBy",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://osf.io/preprints/psyarxiv/63sw4",
+      "relation": "isSupplementTo",
       "scheme": "url"
     }
   ]

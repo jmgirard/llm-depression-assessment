@@ -12,7 +12,6 @@ format: html
 
 library(tidyverse)
 library(patchwork)
-library(readxl)
 library(furrr)
 library(gt)
 
@@ -22,30 +21,15 @@ plan("multisession", workers = 10)
 ## Tidy Data
 
 ```{r}
-fewshot_input <- file.path(
-  "updated_results", 
-  "madrs_predictions_by_video_small.xlsx"
-)
-fewshot_sheets <- excel_sheets(fewshot_input)
-fewshot_raw <- 
-  map(
-    .x = seq_along(fewshot_sheets),
-    .f = \(x) read_xlsx(fewshot_input, sheet = x)
-  ) |> 
-  set_names(fewshot_sheets)
+# Predictions (public, ../data) joined to human ratings (NDA, ../nda)
+source("load_data.R")
+fewshot_raw <- load_prediction_sheets(conditions = "full")
+fewshot_sheets <- names(fewshot_raw)
 ```
 
 ```{r}
-# Look up which sessions were used as fewshot examples (to exclude them)
-excluded_ids <- 
-  map(
-    .x = 0:10,
-    .f = \(i) 
-      read_lines(
-        str_glue("../fewshot_ids/madrs_item_{i}_no_test_sessions.txt")
-      ) |> 
-      basename()
-  )
+# Sessions used as fewshot examples (excluded from evaluation)
+excluded_ids <- load_exemplars()
 ```
 
 ```{r}
@@ -53,7 +37,7 @@ excluded_ids <-
 fewshot_total <- 
   fewshot_raw[[1]] |> 
   select(
-    session, patient, rater, model_name,
+    session, patient, model_name,
     ground_truth, rating_0, rating_1, rating_2
   ) |> 
   filter(session %in% excluded_ids[[1]] == FALSE) |> 

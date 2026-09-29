@@ -11,7 +11,6 @@ format: html
 #| message: false
 
 library(tidyverse)
-library(readxl)
 library(furrr)
 library(brms)
 library(easystats)
@@ -23,28 +22,17 @@ plan("multisession", workers = 9)
 ## Prep Data
 
 ```{r xids}
-# Look up which sessions were used as fewshot examples (to exclude them)
-excluded_ids <- 
-  map(
-    .x = 0:10,
-    .f = \(i) 
-      read_lines(
-        str_glue("../fewshot_ids/madrs_item_{i}_no_test_sessions.txt")
-      ) |> 
-      basename()
-  )
+# Sessions used as fewshot examples (excluded from evaluation)
+source("load_data.R")
+excluded_ids <- load_exemplars()
 ```
 
 ```{r raw}
-ablation_input <- "updated_results/madrs_predictions_by_video_ablation_small.xlsx"
-ablation_sheets <- excel_sheets(ablation_input)
-ablation_raw <- 
-  map(
-    .x = seq_along(ablation_sheets),
-    .f = \(x) read_xlsx(ablation_input, sheet = x) |> 
-      filter(str_detect(model_name, "22B-235B"))
-  )
-names(ablation_raw) <- ablation_sheets
+# Predictions (public, ../data) joined to human ratings (NDA, ../nda)
+ablation_raw <- load_prediction_sheets(
+  conditions = c("full", "no_descriptive", "no_demonstrative", "minimal"),
+  models = "Qwen 3 (22B-235B)"
+)
 ```
 
 ```{r dfs}
@@ -61,7 +49,7 @@ item_dfs <- map(
       transmute(
         session,
         patient,
-        model_name,
+        condition,
         label = ground_truth,
         !!pv1_name := rating_0,
         !!pv2_name := rating_1,
@@ -87,12 +75,12 @@ fit_dat <-
     session = factor(session),
     patient = factor(patient),
     model = factor(
-      model_name, 
+      condition,
       levels = c(
-        "Qwen 3 (22B-235B):", 
-        "Qwen 3 (22B-235B):  No Desc", 
-        "Qwen 3 (22B-235B):  No Dem",
-        "Qwen 3 (22B-235B):  Raw"
+        "full",
+        "no_descriptive",
+        "no_demonstrative",
+        "minimal"
       ),
       labels = c(
         "Maximal",
@@ -137,7 +125,8 @@ fit <- brm(
   iter = 4000,
   chains = 4, 
   cores = 4,
-  file = "ablation",
+  file = file.path(fits_dir, "ablation"),
+  file_refit = "on_change",
   refresh = 500,
   control = list(adapt_delta = 0.99, max_treedepth = 20),
   backend = "cmdstanr"
@@ -159,13 +148,23 @@ model_parameters(fit, effects = "all")
 #| fig-width: 6.5
 
 p <- check_predictions(fit)
-p |> 
-  plot(
-    size_point = 3, 
-    size_bar = 1,
-    colors = c("grey60", "grey10")
-  ) + 
-  scale_x_continuous("Absolute Error", breaks = 1:7, labels = 0:6) + 
+pp <- plot(
+  p,
+  size_point = 3,
+  size_bar = 1,
+  colors = c("grey60", "grey10")
+)
+
+# Older versions of `see` place the outcome categories at 1-7 on a continuous
+# axis; newer versions use a discrete axis already labeled 0-6
+x_is_discrete <- inherits(ggplot2::layer_data(pp, 1)$x, "mapped_discrete")
+
+pp +
+  (if (x_is_discrete) {
+    scale_x_discrete("Absolute Error")
+  } else {
+    scale_x_continuous("Absolute Error", breaks = 1:7, labels = 0:6)
+  }) +
   labs(title = NULL, subtitle = NULL) + 
   theme_bw(base_size = 14) + 
   theme(

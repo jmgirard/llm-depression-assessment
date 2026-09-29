@@ -1,0 +1,5 @@
+# The analysis reports render as standalone documents next to their sources
+# (not into the website's docs/ folder). Published copies are placed in
+# ../analyses. Rendering requires the NDA files; see ../README.md.
+project:
+  type: default

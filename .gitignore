@@ -7,3 +7,16 @@
 
 /.quarto/
 **/*.quarto_ipynb
+
+# Controlled-access NDA downloads (never commit)
+nda/
+
+# Rendering by-products in src/ (published copies live in analyses/).
+# brms fit files embed the analysis data, including NDA-derived variables.
+*.rds
+src/fits/
+src/*.html
+src/*_files/
+src/*_cache/
+src/*.pdf
+src/*.png

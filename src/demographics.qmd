@@ -9,17 +9,16 @@ format: html
 #| message: false
 
 library(tidyverse)
-library(readxl)
 library(datawizard)
 library(kableExtra)
 ```
 
 ```{r}
-obs_file <- "madrs_predictions_by_video_fewshot_small.xlsx"
-obs_raw <- read_xlsx(obs_file, sheet = 1)
-
-demo_file <- "cami_demographics.xlsx"
-demo_raw <- read_xlsx(demo_file, sheet = 1)
+# Sessions and human MADRS totals (NDA madrs01), and participant
+# characteristics (NDA ndar_subject01)
+source("load_data.R")
+obs_raw <- load_prediction_sheets(conditions = "full")[[1]]
+demo_raw <- load_subjects()
 ```
 
 ## Session Summaries
@@ -87,9 +86,9 @@ ggplot(obs_tidy, aes(x = madrs)) +
 demo_tidy <- 
   demo_raw |> 
   transmute(
-    patient = Record.ID,
+    patient,
     diagnosis = fct_collapse(
-      Diagnosis.at.Admission,
+      diagnosis,
       bipolar = c("BP1 (depressed)", "BP1 (hypomanic)", "BP1 (manic)", "BP1 (mixed)", "BP2 (depressed)", "BP2 (hypomanic)", "BP NOS"),
       major_depressive = c("MDD", "MDD w/ psychosis"),
       schizophrenia = "SZ",
@@ -97,25 +96,18 @@ demo_tidy <-
       psychosis_nos = "Psychosis NOS",
       other = "Other"
     ),
-    sex = factor(Sex),
+    sex = factor(sex),
     race = fct_lump_prop(
-      Race,
+      race,
       prop = 0.01
     ),
-    ethnicity = factor(Ethnicity),
-    education = factor(
-      Education,
-      levels = c(
-        "Less than High School",
-        "High School/GED",
-        "Part College or 2-year degree",
-        "4-year College degree",
-        "Part or completed Graduate degree",
-        "Prefer not to answer/Unknown"
-      )
+    ethnicity = factor(ethnicity),
+    education = fct_na_value_to_level(
+      education,
+      level = "Prefer not to answer/Unknown"
     ),
-    age = Age
-  ) |> 
+    age
+  ) |>
   filter(patient %in% unique(obs_tidy$patient)) |> 
   mutate(patient = factor(patient)) |> 
   summarize(

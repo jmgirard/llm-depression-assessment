@@ -21,7 +21,6 @@ Testing Qwen 3 (22B-235B)
 # https://github.com/jmgirard/rocker-bayes/releases/tag/v6.0
 
 library(tidyverse)
-library(readxl)
 library(brms)
 library(rstan)
 library(easystats)
@@ -47,28 +46,17 @@ my_priors <- c(
 ## Prep Data
 
 ```{r xids}
-# Look up which sessions were used as fewshot examples (to exclude them)
-excluded_ids <-
-  map(
-    .x = 0:10,
-    .f = \(i)
-      read_lines(
-        str_glue("../../fewshot_ids/madrs_item_{i}_no_test_sessions.txt")
-      ) |>
-      basename()
-  )
+# Sessions used as fewshot examples (excluded from evaluation)
+source("load_data.R")
+excluded_ids <- load_exemplars()
 ```
 
 ```{r raw}
-ablation_input <- "../updated_results/madrs_predictions_by_video_ablation_small.xlsx"
-ablation_sheets <- excel_sheets(ablation_input)
-ablation_raw <-
-  map(
-    .x = seq_along(ablation_sheets),
-    .f = \(x) read_xlsx(ablation_input, sheet = x) |>
-      filter(str_detect(model_name, "22B-235B"))
-  )
-names(ablation_raw) <- ablation_sheets
+# Predictions (public, ../data) joined to human ratings (NDA, ../nda)
+ablation_raw <- load_prediction_sheets(
+  conditions = "full",
+  models = "Qwen 3 (22B-235B)"
+)
 ```
 
 ```{r dat}
@@ -82,8 +70,6 @@ dat_items <-
         transmute(
           session,
           patient,
-          model_name,
-          rater,
           item = sprintf("%02d", i),
           label = ground_truth,
           seed_1 = rating_0,
@@ -99,11 +85,9 @@ dat_items <-
     }
   ) |>
   bind_rows() |>
-  filter(model_name == "Qwen 3 (22B-235B):") |>
   transmute(
     session,
     patient,
-    rater,
     item = factor(item),
     seed = factor(seed),
     pred,
@@ -115,24 +99,23 @@ dat_sums <-
   dat_items |>
   summarize(
     .by = c(session, patient, item),
-    rater = first(rater),
     pred = first(pred, na_rm = TRUE),
     label = first(label)
   ) |>
   summarize(
     .by = c(session, patient),
-    rater = first(rater),
     pred = sum(pred),
     label = sum(label)
   )
 ```
 
 ```{r demo}
+# Participant characteristics from NDA (ndar_subject01)
 demo <-
-  read_xlsx("../cami_demographics.xlsx") |>
+  load_subjects() |>
   transmute(
-    patient = Record.ID,
-    diagnosis = fct_collapse(Diagnosis.at.Admission,
+    patient,
+    diagnosis = fct_collapse(diagnosis,
       Depression = c("MDD", "MDD w/ psychosis"),
       Bipolar = c("BP1 (manic)", "BP1 (hypomanic)", "BP1 (depressed)",
                   "BP1 (mixed)", "BP2 (depressed)", "BP2 (hypomanic)", "BP NOS"),
@@ -142,9 +125,9 @@ demo <-
     diagnosis = fct_relevel(diagnosis, after = 0,
       "Depression", "Bipolar", "Psychosis", "Substance"
     ),
-    age = Age,
-    sex = factor(Sex, levels = c("Female", "Male")),
-    race = fct_collapse(Race,
+    age,
+    sex = factor(sex, levels = c("Female", "Male")),
+    race = fct_collapse(race,
       White = "White",
       Black = "Black or African American",
       other_level = "Other"
@@ -152,45 +135,19 @@ demo <-
     race = fct_relevel(race, after = 0,
       "White", "Black", "Other"
     ),
-    education = factor(
-      Education,
-      levels = c("Less than High School", "High School/GED",
-                 "Part College or 2-year degree", "4-year College degree",
-                 "Part or completed Graduate degree"),
-      ordered = TRUE
-    ),
+    education = factor(education, ordered = TRUE),
     education0 = as.integer(education) - 1
   ) |>
-  # The demographics file can contain repeated Record.IDs (e.g., re-recorded
-  # at a later visit); keep one row per patient
-  distinct(patient, .keep_all = TRUE) |>
   # Standardize person-level predictors within the analytic sample only
   filter(patient %in% unique(dat_sums$patient)) |>
   mutate(agez = standardize(age))
 
-# Interviewer identity: the predictions file's rater column, with missing
-# values filled from REDCap by matching patient and interview date (the
-# session ID embeds the date as YYMMDD in its second segment).
-# NOTE: interviewer usernames are redacted (RA1-RA4; RA2x was a typo variant
-# of RA2 in the raw data) in this public copy of the analysis code
-redcap_raters <-
-  read_csv("interviewer_ids.csv", show_col_types = FALSE) |>
-  filter(!is.na(panss6_rating_date)) |>
-  transmute(
-    patient = record_id,
-    date6 = format(ymd(panss6_rating_date), "%y%m%d"),
-    rater_rc = str_trim(panss_rater_username)
-  ) |>
-  distinct(patient, date6, .keep_all = TRUE)
-
+# Interviewer identity (RA1-RA4) per session, from the public sessions file
 ready_sums <-
   dat_sums |>
-  mutate(date6 = str_split_i(session, "_", 2)) |>
-  left_join(redcap_raters, by = c("patient", "date6")) |>
+  left_join(select(load_sessions(), session, interviewer), by = "session") |>
   left_join(demo, by = "patient") |>
   mutate(
-    interviewer = coalesce(str_trim(rater), rater_rc),
-    interviewer = if_else(interviewer == "RA2x", "RA2", interviewer),
     interviewer = factor(
       interviewer,
       levels = c("RA1", "RA2", "RA3", "RA4"),
@@ -198,8 +155,7 @@ ready_sums <-
     ),
     patient = factor(patient),
     labelz = standardize(label)
-  ) |>
-  select(-date6, -rater, -rater_rc)
+  )
 ```
 
 ### Create Functions
@@ -401,7 +357,8 @@ fit_audit <- function(group_term, file, seed = NA) {
     chains = 4,
     refresh = 0,
     seed = seed,
-    file = file,
+    file = file.path(fits_dir, file),
+    file_refit = "on_change",
     control = list(adapt_delta = 0.99, max_treedepth = 12),
     backend = "cmdstanr"
   )
