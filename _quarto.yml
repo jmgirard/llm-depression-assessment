@@ -10,6 +10,7 @@ project:
     - "analyses/*.html"
     - "analyses/*_files/**"
     - "src/*.qmd"
+    - "data/*.csv"
     - ".nojekyll"
 
 website:
